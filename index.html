@@ -4,6 +4,11 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <title>Dapur PO — Manajemen Pre-Order Kue & Bakery</title>
+  <meta name="theme-color" content="#2C1E16" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Dapur PO" />
+  <link id="pwa-manifest" rel="manifest" />
 
   <!-- Google Fonts: Fraunces & Plus Jakarta Sans -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -2440,6 +2445,26 @@
     // =========================================================================
     // 10. INITIALIZE APP ON LOAD
     // =========================================================================
+    (function setupPwaManifest() {
+      const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#2C1E16"/><circle cx="256" cy="256" r="160" fill="#C86D51"/><text x="256" y="295" font-size="180" text-anchor="middle" fill="#FAF6F0" font-family="Georgia, serif" font-weight="bold">PO</text></svg>`;
+      const iconUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(iconSvg);
+      const manifestObj = {
+        name: 'Dapur PO — Manajemen Pre-Order Kue',
+        short_name: 'Dapur PO',
+        start_url: location.href.split('#')[0],
+        display: 'standalone',
+        background_color: '#FAF6F0',
+        theme_color: '#2C1E16',
+        icons: [
+          { src: iconUrl, sizes: '192x192', type: 'image/svg+xml', purpose: 'any maskable' },
+          { src: iconUrl, sizes: '512x512', type: 'image/svg+xml', purpose: 'any maskable' }
+        ]
+      };
+      const manifestBlob = new Blob([JSON.stringify(manifestObj)], { type: 'application/manifest+json' });
+      const manifestEl = document.getElementById('pwa-manifest');
+      if (manifestEl) manifestEl.setAttribute('href', URL.createObjectURL(manifestBlob));
+    })();
+
     window.addEventListener('DOMContentLoaded', () => {
       document.getElementById('expDate').value = getTodayISO();
       updateBrandTitles();
