@@ -1,0 +1,2111 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>Dapur PO — Pencatatan Penjualan & Produksi Bakery</title>
+
+  <!-- PWA / Add to Home Screen Meta Tags -->
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Dapur PO" />
+  <meta name="theme-color" content="#3E2723" />
+
+  <!-- Inline Web App Manifest via Data URI (No Base64 Image, Clean SVG Icon) -->
+  <link rel="manifest" href='data:application/manifest+json,{
+    "name": "Dapur PO - Bakery Manager",
+    "short_name": "Dapur PO",
+    "start_url": ".",
+    "display": "standalone",
+    "background_color": "#FAF7F2",
+    "theme_color": "#3E2723",
+    "description": "Aplikasi pencatatan Pre-Order, katalog menu, dan keuangan bakery.",
+    "icons": [
+      {
+        "src": "data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27%3E%3Crect width=%27100%27 height=%27100%27 rx=%2722%27 fill=%27%233E2723%27/%3E%3Ctext x=%2750%27 y=%2766%27 font-size=%2754%27 text-anchor=%27middle%27%3E🥐%3C/text%3E%3C/svg%3E",
+        "sizes": "192x192",
+        "type": "image/svg+xml"
+      }
+    ]
+  }' />
+
+  <!-- Google Fonts: Inter & Fraunces (Artisan Bakery Display) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            serif: ['Fraunces', 'serif'],
+          },
+          colors: {
+            cream: '#FAF7F2',
+            creamDark: '#F1EBE1',
+            espresso: '#3E2723',
+            espressoLight: '#5D4037',
+            terracotta: '#C86D51',
+            terracottaDark: '#B05A3F',
+            sage: '#3B7A57',
+            sageBg: '#E7F3EC',
+            amberWarn: '#D97706',
+            amberBg: '#FEF3C7',
+          }
+        }
+      }
+    };
+  </script>
+
+  <!-- Chart.js untuk Grafik Ringkas -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <style>
+    body {
+      background-color: #FAF7F2;
+      color: #3E2723;
+      -webkit-tap-highlight-color: transparent;
+      overscroll-behavior-y: none;
+    }
+    /* Custom scrollbar lembut */
+    ::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #FAF7F2;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #D7CCC8;
+      border-radius: 9999px;
+    }
+    .safe-bottom {
+      padding-bottom: env(safe-area-inset-bottom, 16px);
+    }
+    .tab-active {
+      color: #C86D51;
+    }
+    .tab-active svg {
+      stroke-width: 2.4;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col md:flex-row font-sans antialiased selection:bg-terracotta/20">
+
+  <!-- ==================== DESKTOP SIDEBAR ==================== -->
+  <aside class="hidden md:flex md:w-64 md:flex-col md:fixed md:inset-y-0 bg-espresso text-cream z-30 shadow-xl">
+    <div class="p-6 border-b border-white/10 flex items-center gap-3">
+      <div class="w-10 h-10 rounded-2xl bg-terracotta flex items-center justify-center text-xl shadow-md">
+        🥐
+      </div>
+      <div>
+        <h1 id="sidebarBakeryName" class="font-serif text-lg font-bold leading-tight tracking-tight">Artisan Bakehouse</h1>
+        <p class="text-xs text-cream/70">Sistem Pencatatan PO</p>
+      </div>
+    </div>
+
+    <nav class="flex-1 px-4 py-6 space-y-2">
+      <button onclick="switchTab('dashboard')" data-nav="dashboard" class="nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all bg-white/10 text-white">
+        <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
+        <span>Dashboard & Jadwal</span>
+      </button>
+      <button onclick="switchTab('orders')" data-nav="orders" class="nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-cream/75 hover:bg-white/10 hover:text-white transition-all">
+        <i data-lucide="shopping-bag" class="w-5 h-5"></i>
+        <span>Pesanan PO</span>
+      </button>
+      <button onclick="switchTab('menu')" data-nav="menu" class="nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-cream/75 hover:bg-white/10 hover:text-white transition-all">
+        <i data-lucide="croissant" class="w-5 h-5"></i>
+        <span>Katalog & Harga</span>
+      </button>
+      <button onclick="switchTab('expenses')" data-nav="expenses" class="nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-cream/75 hover:bg-white/10 hover:text-white transition-all">
+        <i data-lucide="wallet" class="w-5 h-5"></i>
+        <span>Pengeluaran</span>
+      </button>
+      <button onclick="switchTab('settings')" data-nav="settings" class="nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-cream/75 hover:bg-white/10 hover:text-white transition-all">
+        <i data-lucide="settings" class="w-5 h-5"></i>
+        <span>Pengaturan & Backup</span>
+      </button>
+    </nav>
+
+    <div class="p-4 m-4 rounded-2xl bg-white/5 border border-white/10 text-xs text-cream/80 space-y-2">
+      <div class="flex items-center gap-2 font-semibold text-white">
+        <i data-lucide="smartphone" class="w-4 h-4 text-terracotta"></i>
+        <span>Mode Aplikasi HP</span>
+      </div>
+      <p class="leading-relaxed text-cream/70">Buka di Chrome/Safari HP lalu pilih <b>"Add to Home Screen"</b> agar tampil seperti aplikasi native.</p>
+    </div>
+  </aside>
+
+  <!-- ==================== MAIN CONTENT WRAPPER ==================== -->
+  <div class="flex-1 md:pl-64 flex flex-col min-h-screen pb-24 md:pb-10">
+
+    <!-- Top Header (Mobile & Desktop) -->
+    <header class="sticky top-0 z-20 bg-cream/90 backdrop-blur-md border-b border-espresso/10 px-4 py-3.5 md:px-8 flex items-center justify-between">
+      <div class="flex items-center gap-2.5 md:hidden">
+        <div class="w-9 h-9 rounded-xl bg-espresso text-white flex items-center justify-center text-lg shadow-sm">🥐</div>
+        <div>
+          <h1 id="mobileBakeryName" class="font-serif font-bold text-base text-espresso leading-none">Artisan Bakehouse</h1>
+          <span class="text-[11px] text-espresso/60 font-medium">Sistem PO & Keuangan</span>
+        </div>
+      </div>
+
+      <div class="hidden md:block">
+        <h2 id="desktopPageTitle" class="font-serif text-2xl font-bold text-espresso">Dashboard & Jadwal</h2>
+        <p id="currentDateDisplay" class="text-xs text-espresso/60 mt-0.5"></p>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <!-- Quick Copy Blank Form Button -->
+        <button onclick="copyBlankOrderTemplate()" title="Salin Form Order Kosong untuk Pelanggan" class="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-creamDark hover:bg-espresso/10 text-espresso text-xs font-semibold border border-espresso/10 transition active:scale-95">
+          <i data-lucide="copy" class="w-3.5 h-3.5 text-terracotta"></i>
+          <span class="hidden sm:inline">Form Kosong WA/IG</span>
+          <span class="sm:hidden">Form WA</span>
+        </button>
+
+        <!-- Primary CTA: Tambah PO -->
+        <button onclick="openOrderModal()" class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-terracotta hover:bg-terracottaDark text-white text-xs font-semibold shadow-sm shadow-terracotta/30 transition active:scale-95">
+          <i data-lucide="plus" class="w-4 h-4"></i>
+          <span>Catat PO</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="flex-1 max-w-6xl w-full mx-auto px-4 py-5 md:px-8 md:py-7 space-y-6">
+
+      <!-- =================================================================== -->
+      <!-- TAB 1: DASHBOARD & RINGKASAN HARIAN                                 -->
+      <!-- =================================================================== -->
+      <section id="tab-dashboard" class="tab-section space-y-6">
+
+        <!-- Filter Periode -->
+        <div class="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 class="font-serif text-lg md:text-xl font-bold text-espresso md:hidden">Ringkasan Operasional</h3>
+            <p id="mobileDateDisplay" class="text-xs text-espresso/60 md:hidden"></p>
+          </div>
+          <div class="inline-flex p-1 rounded-xl bg-creamDark border border-espresso/10 w-full sm:w-auto">
+            <button onclick="setDashboardPeriod('today')" data-period="today" class="period-btn flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg text-xs font-semibold transition">Hari Ini</button>
+            <button onclick="setDashboardPeriod('month')" data-period="month" class="period-btn flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg text-xs font-semibold transition bg-espresso text-white shadow-sm">Bulan Ini</button>
+            <button onclick="setDashboardPeriod('all')" data-period="all" class="period-btn flex-1 sm:flex-none px-3.5 py-1.5 rounded-lg text-xs font-semibold transition">Semua Waktu</button>
+          </div>
+        </div>
+
+        <!-- 4 Kartu Metrik Utama -->
+        <div class="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4">
+          <!-- Total Omzet -->
+          <div class="bg-white p-4 rounded-2xl border border-espresso/10 shadow-sm">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-medium text-espresso/60">Total Omzet PO</span>
+              <span class="w-7 h-7 rounded-lg bg-sageBg text-sage flex items-center justify-center">
+                <i data-lucide="trending-up" class="w-4 h-4"></i>
+              </span>
+            </div>
+            <p id="metricRevenue" class="text-lg md:text-xl font-bold text-espresso tracking-tight">Rp 0</p>
+            <p id="metricOrderCount" class="text-[11px] text-espresso/50 mt-1">0 pesanan tercatat</p>
+          </div>
+
+          <!-- Total Pengeluaran -->
+          <div class="bg-white p-4 rounded-2xl border border-espresso/10 shadow-sm">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-medium text-espresso/60">Pengeluaran</span>
+              <span class="w-7 h-7 rounded-lg bg-red-50 text-red-600 flex items-center justify-center">
+                <i data-lucide="trending-down" class="w-4 h-4"></i>
+              </span>
+            </div>
+            <p id="metricExpense" class="text-lg md:text-xl font-bold text-espresso tracking-tight">Rp 0</p>
+            <p id="metricExpenseSub" class="text-[11px] text-espresso/50 mt-1">Bahan & operasional</p>
+          </div>
+
+          <!-- Estimasi Laba Bersih -->
+          <div class="bg-espresso text-cream p-4 rounded-2xl shadow-sm">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-medium text-cream/75">Estimasi Laba</span>
+              <span class="w-7 h-7 rounded-lg bg-white/10 text-terracotta flex items-center justify-center">
+                <i data-lucide="coins" class="w-4 h-4"></i>
+              </span>
+            </div>
+            <p id="metricProfit" class="text-lg md:text-xl font-bold text-white tracking-tight">Rp 0</p>
+            <p class="text-[11px] text-cream/60 mt-1">Omzet dikurangi biaya</p>
+          </div>
+
+          <!-- Tagihan Belum Lunas / Sisa DP -->
+          <div class="bg-white p-4 rounded-2xl border border-amber-300/70 shadow-sm">
+            <div class="flex items-center justify-between mb-2">
+              <span class="text-xs font-medium text-amber-800">Sisa Tagihan / DP</span>
+              <span class="w-7 h-7 rounded-lg bg-amberBg text-amberWarn flex items-center justify-center">
+                <i data-lucide="clock" class="w-4 h-4"></i>
+              </span>
+            </div>
+            <p id="metricUnpaid" class="text-lg md:text-xl font-bold text-amber-700 tracking-tight">Rp 0</p>
+            <p id="metricUnpaidCount" class="text-[11px] text-amber-700/70 mt-1">0 order belum lunas</p>
+          </div>
+        </div>
+
+        <!-- Grid 2 Kolom: Jadwal Pengiriman Hari Ini & Kebutuhan Produksi/Stok -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+          <!-- Jadwal Kirim Hari Ini & Mendatang (7 Kolom) -->
+          <div class="lg:col-span-7 bg-white rounded-2xl border border-espresso/10 shadow-sm overflow-hidden flex flex-col">
+            <div class="p-4 md:p-5 border-b border-espresso/10 flex items-center justify-between bg-creamDark/40">
+              <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 rounded-xl bg-terracotta/15 text-terracotta flex items-center justify-center">
+                  <i data-lucide="truck" class="w-4 h-4"></i>
+                </div>
+                <div>
+                  <h3 class="font-serif font-bold text-base text-espresso">Jadwal Kirim Hari Ini & Terdekat</h3>
+                  <p class="text-xs text-espresso/60">Pantau antrean produksi & kurir pickup/ojol</p>
+                </div>
+              </div>
+              <span id="todayDeliveryBadge" class="px-2.5 py-1 rounded-full bg-terracotta text-white text-xs font-bold">0 Hari Ini</span>
+            </div>
+
+            <div id="dashboardDeliveryList" class="p-4 md:p-5 space-y-3 max-h-[460px] overflow-y-auto">
+              <!-- Diisi via JS -->
+            </div>
+          </div>
+
+          <!-- Ringkasan Kebutuhan Produksi & Sisa Kuota/Stok (5 Kolom) -->
+          <div class="lg:col-span-5 bg-white rounded-2xl border border-espresso/10 shadow-sm overflow-hidden flex flex-col">
+            <div class="p-4 md:p-5 border-b border-espresso/10 flex items-center justify-between bg-creamDark/40">
+              <div class="flex items-center gap-2.5">
+                <div class="w-8 h-8 rounded-xl bg-espresso/10 text-espresso flex items-center justify-center">
+                  <i data-lucide="clipboard-list" class="w-4 h-4"></i>
+                </div>
+                <div>
+                  <h3 class="font-serif font-bold text-base text-espresso">Kebutuhan Produksi & Kuota</h3>
+                  <p class="text-xs text-espresso/60">Rekap PO aktif vs stok batch katalog</p>
+                </div>
+              </div>
+              <button onclick="switchTab('menu')" class="text-xs font-semibold text-terracotta hover:underline">Atur Kuota</button>
+            </div>
+
+            <div id="productionSummaryList" class="p-4 md:p-5 space-y-3 max-h-[460px] overflow-y-auto">
+              <!-- Diisi via JS -->
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Grafik Ringkas -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div class="bg-white p-4 md:p-5 rounded-2xl border border-espresso/10 shadow-sm">
+            <h3 class="font-serif font-bold text-base text-espresso mb-1">Perbandingan Omzet vs Pengeluaran</h3>
+            <p class="text-xs text-espresso/60 mb-4">6 Bulan Terakhir</p>
+            <div class="relative h-56 w-full">
+              <canvas id="financeChart"></canvas>
+            </div>
+          </div>
+
+          <div class="bg-white p-4 md:p-5 rounded-2xl border border-espresso/10 shadow-sm">
+            <h3 class="font-serif font-bold text-base text-espresso mb-1">Produk Paling Laris (Qty Terjual)</h3>
+            <p class="text-xs text-espresso/60 mb-4">Berdasarkan seluruh pesanan tercatat</p>
+            <div class="relative h-56 w-full">
+              <canvas id="topProductsChart"></canvas>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- =================================================================== -->
+      <!-- TAB 2: PESANAN PRE-ORDER (PO)                                       -->
+      <!-- =================================================================== -->
+      <section id="tab-orders" class="tab-section hidden space-y-5">
+
+        <!-- Banner Quick Format Order Kosong -->
+        <div class="bg-gradient-to-r from-espresso to-espressoLight text-cream p-4 md:p-5 rounded-2xl shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div class="space-y-1">
+            <div class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-white/15 text-[11px] font-semibold text-cream">
+              <i data-lucide="sparkles" class="w-3 h-3 text-terracotta"></i>
+              <span>Template Chat Pelanggan</span>
+            </div>
+            <h3 class="font-serif text-base md:text-lg font-bold">Kirim Format Pemesanan ke DM IG / WhatsApp</h3>
+            <p class="text-xs text-cream/80">Salin form kosong (Nama, Item, Tanggal Kirim, Pickup/Grab/Gojek) lalu kirim ke calon pembeli.</p>
+          </div>
+          <div class="flex items-center gap-2 shrink-0">
+            <button onclick="copyBlankOrderTemplate()" class="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-terracotta hover:bg-terracottaDark text-white text-xs font-semibold flex items-center justify-center gap-2 shadow transition active:scale-95">
+              <i data-lucide="copy" class="w-4 h-4"></i>
+              <span>Salin Form Kosong</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Filter & Search Bar Pesanan -->
+        <div class="bg-white p-3.5 rounded-2xl border border-espresso/10 shadow-sm space-y-3">
+          <div class="flex flex-col sm:flex-row gap-2.5">
+            <div class="relative flex-1">
+              <i data-lucide="search" class="w-4 h-4 text-espresso/40 absolute left-3.5 top-1/2 -translate-y-1/2"></i>
+              <input id="orderSearchInput" type="text" oninput="renderOrders()" placeholder="Cari nama pemesan, item, atau akun IG/WA..." class="w-full pl-9 pr-4 py-2.5 rounded-xl bg-cream border border-espresso/10 text-sm focus:outline-none focus:border-terracotta" />
+            </div>
+            <input id="orderDateFilter" type="date" onchange="renderOrders()" class="px-3.5 py-2.5 rounded-xl bg-cream border border-espresso/10 text-xs font-medium text-espresso focus:outline-none focus:border-terracotta" />
+            <button onclick="resetOrderFilters()" class="px-3 py-2.5 rounded-xl bg-creamDark hover:bg-espresso/10 text-xs font-semibold text-espresso">Reset</button>
+          </div>
+
+          <div class="flex gap-2 overflow-x-auto pb-1">
+            <button onclick="setOrderStatusFilter('all')" data-ostatus="all" class="ostatus-btn px-3 py-1.5 rounded-lg text-xs font-semibold bg-espresso text-white whitespace-nowrap">Semua PO</button>
+            <button onclick="setOrderStatusFilter('today')" data-ostatus="today" class="ostatus-btn px-3 py-1.5 rounded-lg text-xs font-semibold bg-creamDark text-espresso whitespace-nowrap">Kirim Hari Ini</button>
+            <button onclick="setOrderStatusFilter('unpaid')" data-ostatus="unpaid" class="ostatus-btn px-3 py-1.5 rounded-lg text-xs font-semibold bg-creamDark text-espresso whitespace-nowrap">Belum Lunas / DP</button>
+            <button onclick="setOrderStatusFilter('pending')" data-ostatus="pending" class="ostatus-btn px-3 py-1.5 rounded-lg text-xs font-semibold bg-creamDark text-espresso whitespace-nowrap">Belum Dikirim</button>
+            <button onclick="setOrderStatusFilter('done')" data-ostatus="done" class="ostatus-btn px-3 py-1.5 rounded-lg text-xs font-semibold bg-creamDark text-espresso whitespace-nowrap">Sudah Dikirim</button>
+          </div>
+        </div>
+
+        <!-- Daftar Kartu Pesanan -->
+        <div id="ordersListContainer" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <!-- Diisi via JS -->
+        </div>
+
+      </section>
+
+      <!-- =================================================================== -->
+      <!-- TAB 3: KATALOG MENU & HARGA                                         -->
+      <!-- =================================================================== -->
+      <section id="tab-menu" class="tab-section hidden space-y-5">
+
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 md:p-5 rounded-2xl border border-espresso/10 shadow-sm">
+          <div>
+            <h3 class="font-serif text-lg font-bold text-espresso">Katalog Menu & Kuota Batch PO</h3>
+            <p class="text-xs text-espresso/60 mt-0.5">Ubah harga menu kapan saja tanpa mengubah catatan harga pada pesanan lama.</p>
+          </div>
+          <button onclick="openMenuModal()" class="px-4 py-2.5 rounded-xl bg-espresso hover:bg-espressoLight text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-sm transition active:scale-95">
+            <i data-lucide="plus-circle" class="w-4 h-4 text-terracotta"></i>
+            <span>Tambah Menu Baru</span>
+          </button>
+        </div>
+
+        <div id="menuListContainer" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <!-- Diisi via JS -->
+        </div>
+
+      </section>
+
+      <!-- =================================================================== -->
+      <!-- TAB 4: PENGELUARAN (BAHAN BAKU & OPERASIONAL)                       -->
+      <!-- =================================================================== -->
+      <section id="tab-expenses" class="tab-section hidden space-y-5">
+
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          <!-- Form Input Pengeluaran (5 Kolom) -->
+          <div class="lg:col-span-5 bg-white p-5 rounded-2xl border border-espresso/10 shadow-sm h-fit">
+            <h3 class="font-serif text-lg font-bold text-espresso mb-1">Catat Pengeluaran</h3>
+            <p class="text-xs text-espresso/60 mb-4">Belanja bahan kue, kemasan box/pita, gas, atau ongkir talangan.</p>
+
+            <form id="expenseForm" onsubmit="handleSaveExpense(event)" class="space-y-3.5">
+              <div>
+                <label class="block text-xs font-semibold text-espresso mb-1">Tanggal</label>
+                <input id="expDate" type="date" required class="w-full px-3.5 py-2.5 rounded-xl bg-cream border border-espresso/15 text-sm focus:outline-none focus:border-terracotta" />
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-espresso mb-1">Kategori Pengeluaran</label>
+                <div class="grid grid-cols-2 gap-2">
+                  <label class="cursor-pointer">
+                    <input type="radio" name="expCategory" value="Bahan Baku" checked class="peer sr-only" />
+                    <div class="p-2.5 rounded-xl border border-espresso/15 bg-cream peer-checked:bg-espresso peer-checked:text-white peer-checked:border-espresso text-xs font-semibold text-center transition">
+                      🧈 Bahan Baku
+                    </div>
+                  </label>
+                  <label class="cursor-pointer">
+                    <input type="radio" name="expCategory" value="Operasional" class="peer sr-only" />
+                    <div class="p-2.5 rounded-xl border border-espresso/15 bg-cream peer-checked:bg-espresso peer-checked:text-white peer-checked:border-espresso text-xs font-semibold text-center transition">
+                      📦 Operasional
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-espresso mb-1">Keterangan / Nama Item</label>
+                <input id="expTitle" type="text" required placeholder="Contoh: Butter Wijsman 2kg, Box Hampers, Gas 3kg..." class="w-full px-3.5 py-2.5 rounded-xl bg-cream border border-espresso/15 text-sm focus:outline-none focus:border-terracotta" />
+              </div>
+
+              <div>
+                <label class="block text-xs font-semibold text-espresso mb-1">Nominal Pengeluaran (Rp)</label>
+                <input id="expAmount" type="number" min="1" required placeholder="Contoh: 250000" class="w-full px-3.5 py-2.5 rounded-xl bg-cream border border-espresso/15 text-sm font-semibold focus:outline-none focus:border-terracotta" />
+              </div>
+
+              <button type="submit" class="w-full py-3 rounded-xl bg-terracotta hover:bg-terracottaDark text-white text-sm font-semibold shadow-sm transition active:scale-95">
+                Simpan Pengeluaran
+              </button>
+            </form>
+          </div>
+
+          <!-- Riwayat Pengeluaran (7 Kolom) -->
+          <div class="lg:col-span-7 space-y-4">
+            <!-- Ringkasan Kategori -->
+            <div class="grid grid-cols-2 gap-3">
+              <div class="bg-white p-4 rounded-2xl border border-espresso/10">
+                <span class="text-xs text-espresso/60 font-medium">Total Bahan Baku</span>
+                <p id="totalIngredientExp" class="text-base md:text-lg font-bold text-espresso mt-1">Rp 0</p>
+              </div>
+              <div class="bg-white p-4 rounded-2xl border border-espresso/10">
+                <span class="text-xs text-espresso/60 font-medium">Total Operasional</span>
+                <p id="totalOperationalExp" class="text-base md:text-lg font-bold text-espresso mt-1">Rp 0</p>
+              </div>
+            </div>
+
+            <div class="bg-white rounded-2xl border border-espresso/10 shadow-sm overflow-hidden">
+              <div class="p-4 border-b border-espresso/10 flex items-center justify-between bg-creamDark/40">
+                <h4 class="font-serif font-bold text-base text-espresso">Riwayat Pengeluaran</h4>
+                <select id="expFilterCategory" onchange="renderExpenses()" class="px-3 py-1.5 rounded-lg bg-white border border-espresso/15 text-xs font-semibold text-espresso">
+                  <option value="all">Semua Kategori</option>
+                  <option value="Bahan Baku">Bahan Baku</option>
+                  <option value="Operasional">Operasional</option>
+                </select>
+              </div>
+              <div id="expenseListContainer" class="divide-y divide-espresso/10 max-h-[500px] overflow-y-auto">
+                <!-- Diisi via JS -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- =================================================================== -->
+      <!-- TAB 5: PENGATURAN & BACKUP DATA                                     -->
+      <!-- =================================================================== -->
+      <section id="tab-settings" class="tab-section hidden space-y-6 max-w-3xl">
+
+        <!-- Profil Bakery & Info Rekening -->
+        <div class="bg-white p-5 md:p-6 rounded-2xl border border-espresso/10 shadow-sm space-y-4">
+          <div>
+            <h3 class="font-serif text-lg font-bold text-espresso">Profil Bakery & Rekening Transfer</h3>
+            <p class="text-xs text-espresso/60 mt-0.5">Info ini otomatis dicantumkan pada format nota konfirmasi order pelanggan.</p>
+          </div>
+
+          <form onsubmit="handleSaveSettings(event)" class="space-y-4">
+            <div>
+              <label class="block text-xs font-semibold text-espresso mb-1">Nama Bakery / Toko</label>
+              <input id="setBakeryName" type="text" required class="w-full px-3.5 py-2.5 rounded-xl bg-cream border border-espresso/15 text-sm font-medium focus:outline-none focus:border-terracotta" />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-espresso mb-1">Nomor WhatsApp Admin</label>
+              <input id="setWhatsapp" type="text" placeholder="0812-xxxx-xxxx" class="w-full px-3.5 py-2.5 rounded-xl bg-cream border border-espresso/15 text-sm focus:outline-none focus:border-terracotta" />
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-espresso mb-1">Detail Rekening Transfer Bank (Bisa multi baris)</label>
+              <textarea id="setBankDetails" rows="3" placeholder="Contoh:&#10;BCA 1234567890 a.n. Dapur Artisan&#10;Mandiri 0987654321 a.n. Dapur Artisan" class="w-full px-3.5 py-2.5 rounded-xl bg-cream border border-espresso/15 text-sm focus:outline-none focus:border-terracotta"></textarea>
+            </div>
+
+            <button type="submit" class="px-5 py-2.5 rounded-xl bg-espresso hover:bg-espressoLight text-white text-xs font-semibold transition active:scale-95">
+              Simpan Pengaturan
+            </button>
+          </form>
+        </div>
+
+        <!-- Backup & Restore Data -->
+        <div class="bg-white p-5 md:p-6 rounded-2xl border border-espresso/10 shadow-sm space-y-4">
+          <div>
+            <h3 class="font-serif text-lg font-bold text-espresso">Backup & Keamanan Data</h3>
+            <p class="text-xs text-espresso/60 mt-0.5">Semua data tersimpan lokal di browser HP Anda. Lakukan backup berkala agar data aman jika ganti HP atau hapus cache.</p>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button onclick="exportBackupJSON()" class="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-sageBg text-sage hover:bg-sage hover:text-white border border-sage/20 text-xs font-bold transition">
+              <i data-lucide="download" class="w-4 h-4"></i>
+              <span>Download Backup (.JSON)</span>
+            </button>
+
+            <label class="flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-creamDark hover:bg-espresso/10 text-espresso border border-espresso/15 text-xs font-bold cursor-pointer transition">
+              <i data-lucide="upload" class="w-4 h-4 text-terracotta"></i>
+              <span>Restore Data dari File (.JSON)</span>
+              <input type="file" accept=".json" onchange="importBackupJSON(event)" class="hidden" />
+            </label>
+          </div>
+
+          <div class="pt-4 border-t border-espresso/10 flex items-center justify-between">
+            <div>
+              <p class="text-xs font-semibold text-red-700">Reset ke Data Contoh Awal</p>
+              <p class="text-[11px] text-espresso/60">Menghapus data saat ini dan mengisi ulang contoh data PO bakery.</p>
+            </div>
+            <button onclick="openConfirmReset()" class="px-3.5 py-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-700 text-xs font-semibold border border-red-200 transition">
+              Reset Data
+            </button>
+          </div>
+        </div>
+
+      </section>
+
+    </main>
+  </div>
+
+  <!-- ==================== MOBILE BOTTOM NAVIGATION ==================== -->
+  <nav class="md:hidden fixed bottom-0 inset-x-0 z-30 bg-white/95 backdrop-blur-md border-t border-espresso/10 safe-bottom shadow-[0_-4px_20px_rgba(62,39,35,0.06)]">
+    <div class="grid grid-cols-5 h-16">
+      <button onclick="switchTab('dashboard')" data-mnav="dashboard" class="mnav-btn tab-active flex flex-col items-center justify-center gap-1 text-[10px] font-semibold">
+        <i data-lucide="layout-dashboard" class="w-5 h-5"></i>
+        <span>Beranda</span>
+      </button>
+      <button onclick="switchTab('orders')" data-mnav="orders" class="mnav-btn text-espresso/60 flex flex-col items-center justify-center gap-1 text-[10px] font-semibold">
+        <i data-lucide="shopping-bag" class="w-5 h-5"></i>
+        <span>Pesanan</span>
+      </button>
+      <button onclick="switchTab('menu')" data-mnav="menu" class="mnav-btn text-espresso/60 flex flex-col items-center justify-center gap-1 text-[10px] font-semibold">
+        <i data-lucide="croissant" class="w-5 h-5"></i>
+        <span>Katalog</span>
+      </button>
+      <button onclick="switchTab('expenses')" data-mnav="expenses" class="mnav-btn text-espresso/60 flex flex-col items-center justify-center gap-1 text-[10px] font-semibold">
+        <i data-lucide="wallet" class="w-5 h-5"></i>
+        <span>Biaya</span>
+      </button>
+      <button onclick="switchTab('settings')" data-mnav="settings" class="mnav-btn text-espresso/60 flex flex-col items-center justify-center gap-1 text-[10px] font-semibold">
+        <i data-lucide="settings" class="w-5 h-5"></i>
+        <span>Akun</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- =================================================================== -->
+  <!-- MODAL 1: INPUT / EDIT PESANAN PO                                    -->
+  <!-- =================================================================== -->
+  <div id="orderModal" class="fixed inset-0 z-50 hidden bg-espresso/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div class="bg-cream w-full max-w-2xl rounded-t-3xl sm:rounded-3xl shadow-2xl max-h-[92vh] flex flex-col overflow-hidden border border-espresso/15">
+      <!-- Header Modal -->
+      <div class="px-5 py-4 bg-white border-b border-espresso/10 flex items-center justify-between shrink-0">
+        <div>
+          <h3 id="orderModalTitle" class="font-serif text-lg font-bold text-espresso">Catat Pesanan PO Baru</h3>
+          <p class="text-xs text-espresso/60">Otomatis hitung total & buat format nota WA/IG</p>
+        </div>
+        <button onclick="closeOrderModal()" class="w-9 h-9 rounded-full bg-creamDark hover:bg-espresso/10 flex items-center justify-center text-espresso">
+          <i data-lucide="x" class="w-5 h-5"></i>
+        </button>
+      </div>
+
+      <!-- Body Form -->
+      <form id="orderForm" onsubmit="handleSaveOrder(event)" class="p-5 overflow-y-auto space-y-4 flex-1">
+        <input type="hidden" id="editOrderId" />
+
+        <!-- Info Pemesan -->
+        <div class="bg-white p-4 rounded-2xl border border-espresso/10 space-y-3">
+          <h4 class="text-xs font-bold uppercase tracking-wider text-espresso/60">1. Data Pemesan & Sumber</h4>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold text-espresso mb-1">Nama Pemesan *</label>
+              <input id="ordCustomerName" type="text" required placeholder="Contoh: Kak Nadya" class="w-full px-3.5 py-2.5 rounded-xl bg-cream border border-espresso/15 text-sm focus:outline-none focus:border-terracotta" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-espresso mb-1">Kontak (No. WA / Username IG)</label>
+              <input id="ordContact" type="text" placeholder="0812xxx / @nadyaputri" class="w-full px-3.5 py-2.5 rounded-xl bg-cream border border-espresso/15 text-sm focus:outline-none focus:border-terracotta" />
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold text-espresso mb-1">Sumber Order</label>
+              <div class="grid grid-cols-2 gap-2">
+                <label class="cursor-pointer">
+                  <input type="radio" name="ordSource" value="WhatsApp" checked class="peer sr-only" />
+                  <div class="py-2 px-3 rounded-xl border border-espresso/15 bg-cream peer-checked:bg-sage peer-checked:text-white peer-checked:border-sage text-xs font-semibold text-center transition">
+                    WhatsApp
+                  </div>
+                </label>
+                <label class="cursor-pointer">
+                  <input type="radio" name="ordSource" value="Instagram" class="peer sr-only" />
+                  <div class="py-2 px-3 rounded-xl border border-espresso/15 bg-cream peer-checked:bg-pink-600 peer-checked:text-white peer-checked:border-pink-600 text-xs font-semibold text-center transition">
+                    Instagram
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-espresso mb-1">Tanggal Kirim / Ambil PO *</label>
+              <input id="ordDeliveryDate" type="date" required class="w-full px-3.5 py-2 rounded-xl bg-cream border border-espresso/15 text-sm font-medium focus:outline-none focus:border-terracotta" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Pilihan Menu PO -->
+        <div class="bg-white p-4 rounded-2xl border border-espresso/10 space-y-3">
+          <div class="flex items-center justify-between">
+            <h4 class="text-xs font-bold uppercase tracking-wider text-espresso/60">2. Item Pesanan</h4>
+            <span class="text-[11px] text-espresso/50">Harga otomatis dari katalog</span>
+          </div>
+
+          <!-- Dropdown / Quick Add Item -->
+          <div class="flex gap-2">
+            <select id="menuPickerSelect" class="flex-1 px-3 py-2.5 rounded-xl bg-cream border border-espresso/15 text-sm text-espresso focus:outline-none focus:border-terracotta">
+              <!-- Diisi via JS -->
+            </select>
+            <button type="button" onclick="addSelectedMenuToOrder()" class="px-4 py-2.5 rounded-xl bg-espresso text-white text-xs font-semibold hover:bg-espressoLight shrink-0">
+              + Tambah
+            </button>
+          </div>
+
+          <!-- List Item Terpilih -->
+          <div id="orderItemsContainer" class="space-y-2">
+            <!-- Diisi via JS -->
+          </div>
+        </div>
+
+        <!-- Pengiriman & Ongkos Kirim -->
+        <div class="bg-white p-4 rounded-2xl border border-espresso/10 space-y-3">
+          <h4 class="text-xs font-bold uppercase tracking-wider text-espresso/60">3. Pengiriman & Ongkos Kirim</h4>
+          <div class="grid grid-cols-3 gap-2">
+            <label class="cursor-pointer">
+              <input type="radio" name="ordCourier" value="Pickup" onchange="handleCourierChange()" checked class="peer sr-only" />
+              <div class="py-2.5 px-2 rounded-xl border border-espresso/15 bg-cream peer-checked:bg-espresso peer-checked:text-white peer-checked:border-espresso text-xs font-semibold text-center transition">
+                🏠 Pickup
+              </div>
+            </label>
+            <label class="cursor-pointer">
+              <input type="radio" name="ordCourier" value="Grab" onchange="handleCourierChange()" class="peer sr-only" />
+              <div class="py-2.5 px-2 rounded-xl border border-espresso/15 bg-cream peer-checked:bg-sage peer-checked:text-white peer-checked:border-sage text-xs font-semibold text-center transition">
+                🛵 Grab
+              </div>
+            </label>
+            <label class="cursor-pointer">
+              <input type="radio" name="ordCourier" value="Gojek" onchange="handleCourierChange()" class="peer sr-only" />
+              <div class="py-2.5 px-2 rounded-xl border border-espresso/15 bg-cream peer-checked:bg-emerald-700 peer-checked:text-white peer-checked:border-emerald-700 text-xs font-semibold text-center transition">
+                🛵 Gojek
+              </div>
+            </label>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold text-espresso mb-1">Harga Ongkos Kirim (Rp)</label>
+              <input id="ordShippingFee" type="number" min="0" value="0" oninput="recalculateOrderTotals()" class="w-full px-3.5 py-2.5 rounded-xl bg-cream border border-espresso/15 text-sm font-semibold focus:outline-none focus:border-terracotta" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-espresso mb-1">Catatan / Alamat Kirim</label>
+              <input id="ordAddress" type="text" placeholder="Alamat tujuan / request kartu ucapan..." class="w-full px-3.5 py-2.5 rounded-xl bg-cream border border-espresso/15 text-sm focus:outline-none focus:border-terracotta" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Pembayaran Transfer Bank -->
+        <div class="bg-white p-4 rounded-2xl border border-espresso/10 space-y-3">
+          <h4 class="text-xs font-bold uppercase tracking-wider text-espresso/60">4. Pembayaran (Transfer Bank)</h4>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold text-espresso mb-1">Bank Tujuan Transfer</label>
+              <input id="ordBankName" type="text" list="bankSuggestions" value="BCA" placeholder="BCA / Mandiri / BNI..." class="w-full px-3.5 py-2.5 rounded-xl bg-cream border border-espresso/15 text-sm focus:outline-none focus:border-terracotta" />
+              <datalist id="bankSuggestions">
+                <option value="BCA"></option>
+                <option value="Mandiri"></option>
+                <option value="BNI"></option>
+                <option value="BRI"></option>
+                <option value="CIMB Niaga"></option>
+                <option value="BSI"></option>
+              </datalist>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold text-espresso mb-1">Status Pembayaran</label>
+              <select id="ordPaymentStatus" onchange="handlePaymentStatusChange()" class="w-full px-3.5 py-2.5 rounded-xl bg-cream border border-espresso/15 text-sm font-semibold text-espresso focus:outline-none focus:border-terracotta">
+                <option value="Belum Bayar">Belum Bayar</option>
+                <option value="DP">DP (Down Payment)</option>
+                <option value="Lunas">Lunas</option>
+              </select>
+            </div>
+          </div>
+
+          <div id="dpAmountWrapper" class="hidden grid grid-cols-2 gap-3 pt-1">
+            <div>
+              <label class="block text-xs font-semibold text-amber-800 mb-1">Nominal DP Masuk (Rp)</label>
+              <input id="ordDpAmount" type="number" min="0" value="0" oninput="recalculateOrderTotals()" class="w-full px-3.5 py-2 rounded-xl bg-amberBg/40 border border-amber-300 text-sm font-bold text-espresso focus:outline-none" />
+            </div>
+            <div>
+              <label class="block text-xs font-semibold text-espresso/60 mb-1">Sisa Pelunasan</label>
+              <div id="ordRemainingDisplay" class="px-3.5 py-2 rounded-xl bg-creamDark text-sm font-bold text-amber-800">Rp 0</div>
+            </div>
+          </div>
+
+          <div>
+            <label class="block text-xs font-semibold text-espresso mb-1">Status Produksi / Kirim</label>
+            <select id="ordFulfillmentStatus" class="w-full px-3.5 py-2 rounded-xl bg-cream border border-espresso/15 text-sm font-medium text-espresso focus:outline-none focus:border-terracotta">
+              <option value="Antrean">🕒 Antrean PO</option>
+              <option value="Diproses">👩‍🍳 Sedang Diproses / Baking</option>
+              <option value="Dikirim">✅ Sudah Dikirim / Diambil</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Ringkasan Total -->
+        <div class="bg-espresso text-cream p-4 rounded-2xl space-y-1.5">
+          <div class="flex justify-between text-xs text-cream/75">
+            <span>Subtotal Pesanan</span>
+            <span id="modalSubtotalText">Rp 0</span>
+          </div>
+          <div class="flex justify-between text-xs text-cream/75">
+            <span>Ongkos Kirim</span>
+            <span id="modalShippingText">Rp 0</span>
+          </div>
+          <div class="flex justify-between text-base font-bold text-white pt-2 border-t border-white/15">
+            <span>Total Keseluruhan</span>
+            <span id="modalGrandTotalText">Rp 0</span>
+          </div>
+        </div>
+
+        <!-- Submit Buttons -->
+        <div class="flex gap-2.5 pt-1">
+          <button type="button" onclick="closeOrderModal()" class="flex-1 py-3 rounded-xl bg-creamDark text-espresso text-sm font-semibold">Batal</button>
+          <button type="submit" class="flex-[2] py-3 rounded-xl bg-terracotta hover:bg-terracottaDark text-white text-sm font-bold shadow-md">
+            Simpan Pesanan PO
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- MODAL 2: TAMBAH / EDIT KATALOG MENU                                 -->
+  <!-- =================================================================== -->
+  <div id="menuModal" class="fixed inset-0 z-50 hidden bg-espresso/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div class="bg-cream w-full max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden border border-espresso/15">
+      <div class="px-5 py-4 bg-white border-b border-espresso/10 flex items-center justify-between">
+        <h3 id="menuModalTitle" class="font-serif text-lg font-bold text-espresso">Tambah Menu Bakery</h3>
+        <button onclick="closeMenuModal()" class="w-8 h-8 rounded-full bg-creamDark flex items-center justify-center text-espresso">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <form onsubmit="handleSaveMenu(event)" class="p-5 space-y-4">
+        <input type="hidden" id="editMenuId" />
+
+        <div>
+          <label class="block text-xs font-semibold text-espresso mb-1">Nama Menu / Paket *</label>
+          <input id="menuName" type="text" required placeholder="Contoh: Nastar Wijsman Toples 500gr" class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-espresso/15 text-sm focus:outline-none focus:border-terracotta" />
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-espresso mb-1">Kategori</label>
+            <input id="menuCategory" type="text" list="menuCatList" value="Kue Kering" class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-espresso/15 text-sm focus:outline-none focus:border-terracotta" />
+            <datalist id="menuCatList">
+              <option value="Kue Kering"></option>
+              <option value="Dessert & Jar"></option>
+              <option value="Paket Hampers"></option>
+              <option value="Roti & Pastry"></option>
+            </datalist>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-espresso mb-1">Harga Jual (Rp) *</label>
+            <input id="menuPrice" type="number" min="0" required placeholder="135000" class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-espresso/15 text-sm font-bold focus:outline-none focus:border-terracotta" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-espresso mb-1">Kuota / Stok Batch PO (Pcs/Toples)</label>
+          <input id="menuQuota" type="number" min="0" value="20" required class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-espresso/15 text-sm font-semibold focus:outline-none focus:border-terracotta" />
+          <p class="text-[11px] text-espresso/60 mt-1">Dipakai untuk menghitung sisa slot PO yang masih bisa dijual di dashboard.</p>
+        </div>
+
+        <div class="flex gap-2 pt-2">
+          <button type="button" onclick="closeMenuModal()" class="flex-1 py-2.5 rounded-xl bg-creamDark text-espresso text-xs font-semibold">Batal</button>
+          <button type="submit" class="flex-[2] py-2.5 rounded-xl bg-espresso text-white text-xs font-bold">Simpan Menu</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- MODAL 3: PREVIEW & SALIN NOTA KONFIRMASI ORDER                      -->
+  <!-- =================================================================== -->
+  <div id="receiptModal" class="fixed inset-0 z-50 hidden bg-espresso/60 backdrop-blur-xs flex items-end sm:items-center justify-center p-0 sm:p-4">
+    <div class="bg-cream w-full max-w-md rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden border border-espresso/15">
+      <div class="px-5 py-4 bg-white border-b border-espresso/10 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="text-lg">🧾</span>
+          <h3 class="font-serif text-base font-bold text-espresso">Format Konfirmasi Order</h3>
+        </div>
+        <button onclick="closeReceiptModal()" class="w-8 h-8 rounded-full bg-creamDark flex items-center justify-center text-espresso">
+          <i data-lucide="x" class="w-4 h-4"></i>
+        </button>
+      </div>
+
+      <div class="p-5 space-y-4">
+        <p class="text-xs text-espresso/70">Teks di bawah ini sudah diformat rapi untuk dikirim langsung ke WhatsApp atau DM Instagram pemesan:</p>
+        <textarea id="receiptPreviewText" rows="12" readonly class="w-full p-3.5 rounded-2xl bg-white border border-espresso/15 text-xs font-mono text-espresso leading-relaxed focus:outline-none"></textarea>
+
+        <div class="flex gap-2">
+          <button onclick="closeReceiptModal()" class="flex-1 py-3 rounded-xl bg-creamDark text-espresso text-xs font-semibold">Tutup</button>
+          <button onclick="copyReceiptFromModal()" class="flex-[2] py-3 rounded-xl bg-terracotta hover:bg-terracottaDark text-white text-xs font-bold flex items-center justify-center gap-2 shadow">
+            <i data-lucide="copy" class="w-4 h-4"></i>
+            <span>Salin Teks Nota</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =================================================================== -->
+  <!-- MODAL 4: CUSTOM CONFIRMATION DIALOG (Pengganti confirm())           -->
+  <!-- =================================================================== -->
+  <div id="confirmModal" class="fixed inset-0 z-50 hidden bg-espresso/60 backdrop-blur-xs flex items-center justify-center p-4">
+    <div class="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl border border-espresso/10 space-y-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-2xl bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+          <i data-lucide="alert-triangle" class="w-5 h-5"></i>
+        </div>
+        <div>
+          <h4 id="confirmTitle" class="font-serif font-bold text-base text-espresso">Konfirmasi</h4>
+          <p id="confirmMessage" class="text-xs text-espresso/70 mt-0.5">Apakah Anda yakin?</p>
+        </div>
+      </div>
+      <div class="flex gap-2 pt-1">
+        <button onclick="closeConfirmModal()" class="flex-1 py-2.5 rounded-xl bg-creamDark text-espresso text-xs font-semibold">Batal</button>
+        <button id="confirmActionBtn" class="flex-1 py-2.5 rounded-xl bg-red-600 text-white text-xs font-bold">Ya, Lanjutkan</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== TOAST NOTIFICATION ==================== -->
+  <div id="toastBox" class="fixed top-4 left-1/2 -translate-x-1/2 z-[60] pointer-events-none opacity-0 transition-all duration-300 transform -translate-y-2">
+    <div class="bg-espresso text-white px-4 py-2.5 rounded-full shadow-lg flex items-center gap-2 text-xs font-semibold border border-white/10">
+      <i data-lucide="check-circle-2" class="w-4 h-4 text-emerald-400"></i>
+      <span id="toastMessage">Berhasil disalin!</span>
+    </div>
+  </div>
+
+  <!-- ==================== JAVASCRIPT APPLICATION LOGIC ==================== -->
+  <script>
+    // =========================================================================
+    // 1. STATE & DATA INITIALIZATION (LOCALSTORAGE)
+    // =========================================================================
+    const STORAGE_KEY = 'dapur_po_bakery_v1';
+
+    function getTodayISO() {
+      const now = new Date();
+      const offset = now.getTimezoneOffset() * 60000;
+      return new Date(now.getTime() - offset).toISOString().split('T')[0];
+    }
+
+    function getTomorrowISO() {
+      const now = new Date(Date.now() + 86400000);
+      const offset = now.getTimezoneOffset() * 60000;
+      return new Date(now.getTime() - offset).toISOString().split('T')[0];
+    }
+
+    function getDefaultData() {
+      const today = getTodayISO();
+      const tomorrow = getTomorrowISO();
+      return {
+        settings: {
+          bakeryName: 'Artisan Bakehouse',
+          whatsapp: '0812-3456-7890',
+          bankDetails: 'BCA 1234567890 a.n. Artisan Bakehouse\nMandiri 0987654321 a.n. Artisan Bakehouse'
+        },
+        menus: [
+          { id: 'm1', name: 'Nastar Wijsman Klasik (500gr)', category: 'Kue Kering', price: 145000, batchQuota: 25 },
+          { id: 'm2', name: 'Kastengel Keju Edam (500gr)', category: 'Kue Kering', price: 155000, batchQuota: 20 },
+          { id: 'm3', name: 'Signature Tiramisu Jar (300ml)', category: 'Dessert & Jar', price: 65000, batchQuota: 30 },
+          { id: 'm4', name: 'Hampers Duo Kuker (Nastar + Kastengel)', category: 'Paket Hampers', price: 315000, batchQuota: 15 }
+        ],
+        orders: [
+          {
+            id: 'ord-101',
+            customerName: 'Kak Nadya Putri',
+            contact: '@nadyaputri',
+            source: 'Instagram',
+            deliveryDate: today,
+            items: [
+              { menuId: 'm1', name: 'Nastar Wijsman Klasik (500gr)', price: 145000, qty: 2 },
+              { menuId: 'm3', name: 'Signature Tiramisu Jar (300ml)', price: 65000, qty: 2 }
+            ],
+            courier: 'Grab',
+            shippingFee: 18000,
+            address: 'Jl. Riau No. 45, Bandung',
+            bankName: 'BCA',
+            paymentStatus: 'Lunas',
+            dpAmount: 438000,
+            fulfillmentStatus: 'Diproses',
+            createdAt: today
+          },
+          {
+            id: 'ord-102',
+            customerName: 'Mas Dimas Pratama',
+            contact: '0813-9988-7766',
+            source: 'WhatsApp',
+            deliveryDate: today,
+            items: [
+              { menuId: 'm4', name: 'Hampers Duo Kuker (Nastar + Kastengel)', price: 315000, qty: 1 }
+            ],
+            courier: 'Pickup',
+            shippingFee: 0,
+            address: 'Ambil di dapur jam 15.00',
+            bankName: 'Mandiri',
+            paymentStatus: 'DP',
+            dpAmount: 150000,
+            fulfillmentStatus: 'Antrean',
+            createdAt: today
+          },
+          {
+            id: 'ord-103',
+            customerName: 'Bu Rina Wijaya',
+            contact: '0812-2233-4455',
+            source: 'WhatsApp',
+            deliveryDate: tomorrow,
+            items: [
+              { menuId: 'm2', name: 'Kastengel Keju Edam (500gr)', price: 155000, qty: 3 }
+            ],
+            courier: 'Gojek',
+            shippingFee: 22000,
+            address: 'Komplek Setiabudi Regency Blok B2',
+            bankName: 'BCA',
+            paymentStatus: 'Belum Bayar',
+            dpAmount: 0,
+            fulfillmentStatus: 'Antrean',
+            createdAt: today
+          }
+        ],
+        expenses: [
+          { id: 'exp-1', date: today, category: 'Bahan Baku', title: 'Butter Wijsman 2 Kaleng & Keju Edam', amount: 420000 },
+          { id: 'exp-2', date: today, category: 'Operasional', title: 'Box Hampers Hardbox + Pita & Kartu Ucapan', amount: 115000 }
+        ]
+      };
+    }
+
+    let appData = loadData();
+    let currentDashboardPeriod = 'month';
+    let currentOrderStatusFilter = 'all';
+    let draftOrderItems = [];
+    let financeChartInstance = null;
+    let topProductsChartInstance = null;
+
+    function loadData() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) {
+          const initial = getDefaultData();
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(initial));
+          return initial;
+        }
+        return JSON.parse(raw);
+      } catch (e) {
+        console.error('Gagal memuat data:', e);
+        return getDefaultData();
+      }
+    }
+
+    function saveData() {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+      } catch (e) {
+        showToast('Gagal menyimpan ke memori perangkat!');
+      }
+    }
+
+    // =========================================================================
+    // 2. FORMATTING & UTILITY HELPERS
+    // =========================================================================
+    function formatRupiah(num) {
+      const n = Number(num) || 0;
+      return 'Rp ' + n.toLocaleString('id-ID');
+    }
+
+    function formatDateID(isoDate) {
+      if (!isoDate) return '-';
+      const parts = isoDate.split('-');
+      if (parts.length !== 3) return isoDate;
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+      return `${parseInt(parts[2], 10)} ${months[parseInt(parts[1], 10) - 1]} ${parts[0]}`;
+    }
+
+    function getOrderSubtotal(order) {
+      return (order.items || []).reduce((sum, item) => sum + (Number(item.price) * Number(item.qty)), 0);
+    }
+
+    function getOrderTotal(order) {
+      return getOrderSubtotal(order) + (Number(order.shippingFee) || 0);
+    }
+
+    function getOrderRemaining(order) {
+      const total = getOrderTotal(order);
+      if (order.paymentStatus === 'Lunas') return 0;
+      if (order.paymentStatus === 'DP') return Math.max(0, total - (Number(order.dpAmount) || 0));
+      return total;
+    }
+
+    function showToast(msg) {
+      const box = document.getElementById('toastBox');
+      document.getElementById('toastMessage').textContent = msg;
+      box.classList.remove('opacity-0', '-translate-y-2');
+      box.classList.add('opacity-100', 'translate-y-0');
+      setTimeout(() => {
+        box.classList.remove('opacity-100', 'translate-y-0');
+        box.classList.add('opacity-0', '-translate-y-2');
+      }, 2400);
+    }
+
+    function copyTextToClipboard(text, successMsg = 'Teks berhasil disalin!') {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+        showToast(successMsg);
+      } catch (err) {
+        showToast('Gagal menyalin otomatis, silakan salin manual.');
+      }
+      document.body.removeChild(textarea);
+    }
+
+    // =========================================================================
+    // 3. NAVIGATION & TAB SWITCHING
+    // =========================================================================
+    const pageTitles = {
+      dashboard: 'Dashboard & Jadwal',
+      orders: 'Daftar Pesanan PO',
+      menu: 'Katalog Menu & Harga',
+      expenses: 'Pengeluaran & Bahan Baku',
+      settings: 'Pengaturan & Backup Data'
+    };
+
+    function switchTab(tabName) {
+      document.querySelectorAll('.tab-section').forEach(sec => sec.classList.add('hidden'));
+      const activeSec = document.getElementById(`tab-${tabName}`);
+      if (activeSec) activeSec.classList.remove('hidden');
+
+      // Update Desktop Sidebar
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        if (btn.dataset.nav === tabName) {
+          btn.classList.add('bg-white/10', 'text-white');
+          btn.classList.remove('text-cream/75');
+        } else {
+          btn.classList.remove('bg-white/10', 'text-white');
+          btn.classList.add('text-cream/75');
+        }
+      });
+
+      // Update Mobile Bottom Nav
+      document.querySelectorAll('.mnav-btn').forEach(btn => {
+        if (btn.dataset.mnav === tabName) {
+          btn.classList.add('tab-active');
+          btn.classList.remove('text-espresso/60');
+        } else {
+          btn.classList.remove('tab-active');
+          btn.classList.add('text-espresso/60');
+        }
+      });
+
+      document.getElementById('desktopPageTitle').textContent = pageTitles[tabName] || 'Dashboard';
+
+      if (tabName === 'dashboard') renderDashboard();
+      if (tabName === 'orders') renderOrders();
+      if (tabName === 'menu') renderMenus();
+      if (tabName === 'expenses') renderExpenses();
+      if (tabName === 'settings') renderSettings();
+
+      lucide.createIcons();
+    }
+
+    // =========================================================================
+    // 4. TEMPLATE FORMAT ORDER (WA / IG)
+    // =========================================================================
+    function copyBlankOrderTemplate() {
+      const bakery = appData.settings.bakeryName || 'Bakery Kami';
+      const menuPreview = appData.menus.map(m => `• ${m.name} (${formatRupiah(m.price)})`).join('\n');
+
+      const template = `Halo! Terima kasih sudah menghubungi *${bakery}* 🥐✨
+Silakan isi format Pre-Order (PO) di bawah ini ya:
+
+*FORMAT ORDER PO - ${bakery.toUpperCase()}*
+• Nama Pemesan :
+• No. WA / IG :
+• Tanggal Kirim / Ambil :
+• Pesanan & Jumlah :
+  - (Contoh: Nastar 2 toples)
+• Metode Pengiriman : Pickup / Grab / Gojek
+• Alamat Lengkap (jika dikirim) :
+
+📋 *Daftar Menu Tersedia:*
+${menuPreview}
+
+Setelah diisi, admin akan menginfokan total pesanan + ongkos kirim ya. Terima kasih! 🙏`;
+
+      copyTextToClipboard(template, 'Format order kosong siap dikirim ke WA/IG!');
+    }
+
+    function generateOrderReceiptText(order) {
+      const bakery = appData.settings.bakeryName || 'Artisan Bakehouse';
+      const subtotal = getOrderSubtotal(order);
+      const shipping = Number(order.shippingFee) || 0;
+      const grandTotal = subtotal + shipping;
+      const remaining = getOrderRemaining(order);
+
+      const itemsLines = order.items.map((item, idx) => {
+        return `${idx + 1}. ${item.name} (${item.qty}x @ ${formatRupiah(item.price)}) = ${formatRupiah(item.price * item.qty)}`;
+      }).join('\n');
+
+      let paymentLine = `Status Bayar : *${order.paymentStatus}* (Transfer ${order.bankName || 'Bank'})`;
+      if (order.paymentStatus === 'DP') {
+        paymentLine += `\nDP Masuk     : ${formatRupiah(order.dpAmount)}\nSisa Tagihan : *${formatRupiah(remaining)}*`;
+      } else if (order.paymentStatus === 'Belum Bayar') {
+        paymentLine += `\nTotal Tagihan: *${formatRupiah(grandTotal)}*`;
+      }
+
+      const bankInfo = appData.settings.bankDetails ? `\n🏦 *Rekening Transfer:*\n${appData.settings.bankDetails}\n` : '';
+
+      return `*KONFIRMASI PESANAN PO - ${bakery.toUpperCase()}* 🥐
+----------------------------------------
+👤 *Nama Pemesan* : ${order.customerName}
+📅 *Tanggal Kirim* : ${formatDateID(order.deliveryDate)}
+🚚 *Pengiriman*    : ${order.courier}${order.address ? `\n📍 *Alamat/Catatan*: ${order.address}` : ''}
+
+🛒 *Rincian Pesanan:*
+${itemsLines}
+
+----------------------------------------
+Subtotal Pesanan : ${formatRupiah(subtotal)}
+Ongkos Kirim     : ${shipping === 0 ? 'Rp 0 (Pickup)' : formatRupiah(shipping)}
+*TOTAL KESELURUHAN : ${formatRupiah(grandTotal)}*
+----------------------------------------
+💳 ${paymentLine}
+${bankInfo}
+Terima kasih sudah order di *${bakery}*! Mohon konfirmasi jika detail pesanan sudah sesuai 🙏✨`;
+    }
+
+    function openReceiptModal(orderId) {
+      const order = appData.orders.find(o => o.id === orderId);
+      if (!order) return;
+      document.getElementById('receiptPreviewText').value = generateOrderReceiptText(order);
+      document.getElementById('receiptModal').classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    function closeReceiptModal() {
+      document.getElementById('receiptModal').classList.add('hidden');
+    }
+
+    function copyReceiptFromModal() {
+      const text = document.getElementById('receiptPreviewText').value;
+      copyTextToClipboard(text, 'Nota konfirmasi berhasil disalin!');
+    }
+
+    // =========================================================================
+    // 5. DASHBOARD RENDERING & CHARTS
+    // =========================================================================
+    function setDashboardPeriod(period) {
+      currentDashboardPeriod = period;
+      document.querySelectorAll('.period-btn').forEach(btn => {
+        if (btn.dataset.period === period) {
+          btn.classList.add('bg-espresso', 'text-white', 'shadow-sm');
+          btn.classList.remove('text-espresso');
+        } else {
+          btn.classList.remove('bg-espresso', 'text-white', 'shadow-sm');
+          btn.classList.add('text-espresso');
+        }
+      });
+      renderDashboard();
+    }
+
+    function filterByPeriod(dateStr, period) {
+      if (period === 'all') return true;
+      const today = getTodayISO();
+      if (period === 'today') return dateStr === today;
+      if (period === 'month') return dateStr && dateStr.slice(0, 7) === today.slice(0, 7);
+      return true;
+    }
+
+    function renderDashboard() {
+      const today = getTodayISO();
+
+      // Filter orders & expenses berdasarkan periode
+      const filteredOrders = appData.orders.filter(o => filterByPeriod(o.deliveryDate, currentDashboardPeriod));
+      const filteredExpenses = appData.expenses.filter(e => filterByPeriod(e.date, currentDashboardPeriod));
+
+      const totalRevenue = filteredOrders.reduce((sum, o) => sum + getOrderTotal(o), 0);
+      const totalExpense = filteredExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+      const netProfit = totalRevenue - totalExpense;
+
+      const unpaidOrders = filteredOrders.filter(o => o.paymentStatus !== 'Lunas');
+      const totalUnpaid = unpaidOrders.reduce((sum, o) => sum + getOrderRemaining(o), 0);
+
+      document.getElementById('metricRevenue').textContent = formatRupiah(totalRevenue);
+      document.getElementById('metricOrderCount').textContent = `${filteredOrders.length} pesanan PO`;
+      document.getElementById('metricExpense').textContent = formatRupiah(totalExpense);
+      document.getElementById('metricProfit').textContent = formatRupiah(netProfit);
+      document.getElementById('metricUnpaid').textContent = formatRupiah(totalUnpaid);
+      document.getElementById('metricUnpaidCount').textContent = `${unpaidOrders.length} order belum lunas`;
+
+      // Jadwal Pengiriman Hari Ini & Mendatang
+      const todayOrders = appData.orders.filter(o => o.deliveryDate === today);
+      document.getElementById('todayDeliveryBadge').textContent = `${todayOrders.length} Hari Ini`;
+
+      const upcomingOrders = appData.orders
+        .filter(o => o.deliveryDate >= today)
+        .sort((a, b) => a.deliveryDate.localeCompare(b.deliveryDate));
+
+      const deliveryListEl = document.getElementById('dashboardDeliveryList');
+      if (upcomingOrders.length === 0) {
+        deliveryListEl.innerHTML = `
+          <div class="text-center py-8 text-espresso/50 text-xs space-y-2">
+            <p class="text-2xl">🧺</p>
+            <p>Belum ada jadwal pengiriman PO hari ini atau mendatang.</p>
+          </div>`;
+      } else {
+        deliveryListEl.innerHTML = upcomingOrders.map(order => {
+          const isToday = order.deliveryDate === today;
+          const total = getOrderTotal(order);
+          const itemSummary = order.items.map(i => `${i.qty}x ${i.name}`).join(', ');
+
+          const payBadge = order.paymentStatus === 'Lunas'
+            ? `<span class="px-2 py-0.5 rounded-md bg-sageBg text-sage text-[10px] font-bold">Lunas</span>`
+            : order.paymentStatus === 'DP'
+            ? `<span class="px-2 py-0.5 rounded-md bg-amberBg text-amber-800 text-[10px] font-bold">DP (Sisa ${formatRupiah(getOrderRemaining(order))})</span>`
+            : `<span class="px-2 py-0.5 rounded-md bg-red-100 text-red-700 text-[10px] font-bold">Belum Bayar</span>`;
+
+          const courierIcon = order.courier === 'Pickup' ? '🏠' : '🛵';
+
+          return `
+            <div class="p-3.5 rounded-xl border ${isToday ? 'border-terracotta/40 bg-terracotta/[0.03]' : 'border-espresso/10 bg-cream/50'} space-y-2.5">
+              <div class="flex items-start justify-between gap-2">
+                <div>
+                  <div class="flex items-center gap-1.5 flex-wrap">
+                    <span class="font-bold text-sm text-espresso">${order.customerName}</span>
+                    <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${isToday ? 'bg-terracotta text-white' : 'bg-espresso/10 text-espresso'}">
+                      ${isToday ? 'HARI INI' : formatDateID(order.deliveryDate)}
+                    </span>
+                    <span class="px-2 py-0.5 rounded-full bg-white border border-espresso/15 text-[10px] font-semibold text-espresso">
+                      ${courierIcon} ${order.courier}
+                    </span>
+                  </div>
+                  <p class="text-xs text-espresso/75 mt-1 leading-relaxed">${itemSummary}</p>
+                </div>
+                <div class="text-right shrink-0">
+                  <p class="text-xs font-bold text-espresso">${formatRupiah(total)}</p>
+                  <div class="mt-1">${payBadge}</div>
+                </div>
+              </div>
+
+              <div class="flex items-center justify-between pt-2 border-t border-espresso/10 gap-2">
+                <select onchange="quickUpdateFulfillment('${order.id}', this.value)" class="px-2.5 py-1 rounded-lg bg-white border border-espresso/15 text-[11px] font-semibold text-espresso">
+                  <option value="Antrean" ${order.fulfillmentStatus === 'Antrean' ? 'selected' : ''}>🕒 Antrean</option>
+                  <option value="Diproses" ${order.fulfillmentStatus === 'Diproses' ? 'selected' : ''}>👩‍🍳 Diproses</option>
+                  <option value="Dikirim" ${order.fulfillmentStatus === 'Dikirim' ? 'selected' : ''}>✅ Dikirim</option>
+                </select>
+
+                <button onclick="openReceiptModal('${order.id}')" class="px-2.5 py-1 rounded-lg bg-espresso text-white text-[11px] font-semibold flex items-center gap-1 hover:bg-espressoLight">
+                  <i data-lucide="file-text" class="w-3 h-3"></i>
+                  <span>Nota WA/IG</span>
+                </button>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+
+      // Kebutuhan Produksi & Sisa Kuota/Stok
+      const activeOrders = appData.orders.filter(o => o.fulfillmentStatus !== 'Dikirim');
+      const neededMap = {};
+      activeOrders.forEach(o => {
+        o.items.forEach(item => {
+          neededMap[item.menuId] = (neededMap[item.menuId] || 0) + Number(item.qty);
+        });
+      });
+
+      const prodListEl = document.getElementById('productionSummaryList');
+      if (appData.menus.length === 0) {
+        prodListEl.innerHTML = `<p class="text-xs text-espresso/50 text-center py-6">Belum ada menu di katalog.</p>`;
+      } else {
+        prodListEl.innerHTML = appData.menus.map(menu => {
+          const orderedQty = neededMap[menu.id] || 0;
+          const quota = Number(menu.batchQuota) || 0;
+          const remainingStock = Math.max(0, quota - orderedQty);
+          const pct = quota > 0 ? Math.min(100, Math.round((orderedQty / quota) * 100)) : 0;
+          const isOver = orderedQty > quota;
+
+          return `
+            <div class="p-3 rounded-xl bg-cream/60 border border-espresso/10 space-y-2">
+              <div class="flex items-start justify-between gap-2">
+                <div>
+                  <p class="text-xs font-bold text-espresso">${menu.name}</p>
+                  <p class="text-[11px] text-espresso/60">Perlu dibuat (PO Aktif): <b class="text-espresso">${orderedQty} pcs</b></p>
+                </div>
+                <span class="px-2 py-0.5 rounded-lg text-[10px] font-bold ${isOver ? 'bg-red-100 text-red-700' : remainingStock === 0 ? 'bg-amberBg text-amber-800' : 'bg-sageBg text-sage'}">
+                  ${isOver ? `Over ${orderedQty - quota}` : `Sisa Kuota: ${remainingStock}`}
+                </span>
+              </div>
+
+              <div class="w-full h-2 rounded-full bg-espresso/10 overflow-hidden">
+                <div class="h-full rounded-full ${isOver ? 'bg-red-500' : 'bg-terracotta'}" style="width: ${pct}%"></div>
+              </div>
+              <div class="flex justify-between text-[10px] text-espresso/50">
+                <span>Terpesan: ${orderedQty} / ${quota} kuota batch</span>
+                <span>${formatRupiah(menu.price)}</span>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+
+      renderCharts();
+      lucide.createIcons();
+    }
+
+    function quickUpdateFulfillment(orderId, newStatus) {
+      const idx = appData.orders.findIndex(o => o.id === orderId);
+      if (idx !== -1) {
+        appData.orders[idx].fulfillmentStatus = newStatus;
+        saveData();
+        renderDashboard();
+        showToast(`Status pesanan diubah ke "${newStatus}"`);
+      }
+    }
+
+    function renderCharts() {
+      // 1. Grafik Omzet vs Pengeluaran (6 Bulan Terakhir)
+      const monthLabels = [];
+      const monthKeys = [];
+      const now = new Date();
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+
+      for (let i = 5; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+        monthKeys.push(key);
+        monthLabels.push(`${monthNames[d.getMonth()]} ${String(d.getFullYear()).slice(2)}`);
+      }
+
+      const revData = monthKeys.map(k =>
+        appData.orders.filter(o => o.deliveryDate && o.deliveryDate.startsWith(k)).reduce((s, o) => s + getOrderTotal(o), 0)
+      );
+      const expData = monthKeys.map(k =>
+        appData.expenses.filter(e => e.date && e.date.startsWith(k)).reduce((s, e) => s + (Number(e.amount) || 0), 0)
+      );
+
+      const ctx1 = document.getElementById('financeChart');
+      if (ctx1) {
+        if (financeChartInstance) financeChartInstance.destroy();
+        financeChartInstance = new Chart(ctx1, {
+          type: 'bar',
+          data: {
+            labels: monthLabels,
+            datasets: [
+              {
+                label: 'Omzet PO',
+                data: revData,
+                backgroundColor: '#3B7A57',
+                borderRadius: 6
+              },
+              {
+                label: 'Pengeluaran',
+                data: expData,
+                backgroundColor: '#C86D51',
+                borderRadius: 6
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } }
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+                ticks: {
+                  font: { size: 10 },
+                  callback: v => 'Rp ' + (v / 1000) + 'k'
+                }
+              },
+              x: { ticks: { font: { size: 10 } } }
+            }
+          }
+        });
+      }
+
+      // 2. Grafik Produk Terlaris
+      const productSold = {};
+      appData.orders.forEach(o => {
+        o.items.forEach(item => {
+          productSold[item.name] = (productSold[item.name] || 0) + Number(item.qty);
+        });
+      });
+
+      const sortedProducts = Object.entries(productSold)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5);
+
+      const ctx2 = document.getElementById('topProductsChart');
+      if (ctx2) {
+        if (topProductsChartInstance) topProductsChartInstance.destroy();
+        topProductsChartInstance = new Chart(ctx2, {
+          type: 'doughnut',
+          data: {
+            labels: sortedProducts.length ? sortedProducts.map(p => p[0]) : ['Belum ada data'],
+            datasets: [{
+              data: sortedProducts.length ? sortedProducts.map(p => p[1]) : [1],
+              backgroundColor: ['#3E2723', '#C86D51', '#3B7A57', '#D97706', '#8D6E63'],
+              borderWidth: 0
+            }]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } }
+            }
+          }
+        });
+      }
+    }
+
+    // =========================================================================
+    // 6. PESANAN PO (CRUD, FILTER, FORM MODAL)
+    // =========================================================================
+    function setOrderStatusFilter(status) {
+      currentOrderStatusFilter = status;
+      document.querySelectorAll('.ostatus-btn').forEach(btn => {
+        if (btn.dataset.ostatus === status) {
+          btn.classList.add('bg-espresso', 'text-white');
+          btn.classList.remove('bg-creamDark', 'text-espresso');
+        } else {
+          btn.classList.remove('bg-espresso', 'text-white');
+          btn.classList.add('bg-creamDark', 'text-espresso');
+        }
+      });
+      renderOrders();
+    }
+
+    function resetOrderFilters() {
+      document.getElementById('orderSearchInput').value = '';
+      document.getElementById('orderDateFilter').value = '';
+      setOrderStatusFilter('all');
+    }
+
+    function renderOrders() {
+      const search = (document.getElementById('orderSearchInput').value || '').toLowerCase();
+      const dateFilter = document.getElementById('orderDateFilter').value;
+      const today = getTodayISO();
+
+      let list = [...appData.orders].sort((a, b) => b.deliveryDate.localeCompare(a.deliveryDate));
+
+      if (search) {
+        list = list.filter(o =>
+          o.customerName.toLowerCase().includes(search) ||
+          (o.contact || '').toLowerCase().includes(search) ||
+          o.items.some(i => i.name.toLowerCase().includes(search))
+        );
+      }
+
+      if (dateFilter) {
+        list = list.filter(o => o.deliveryDate === dateFilter);
+      }
+
+      if (currentOrderStatusFilter === 'today') {
+        list = list.filter(o => o.deliveryDate === today);
+      } else if (currentOrderStatusFilter === 'unpaid') {
+        list = list.filter(o => o.paymentStatus !== 'Lunas');
+      } else if (currentOrderStatusFilter === 'pending') {
+        list = list.filter(o => o.fulfillmentStatus !== 'Dikirim');
+      } else if (currentOrderStatusFilter === 'done') {
+        list = list.filter(o => o.fulfillmentStatus === 'Dikirim');
+      }
+
+      const container = document.getElementById('ordersListContainer');
+      if (list.length === 0) {
+        container.innerHTML = `
+          <div class="col-span-full bg-white rounded-2xl p-10 text-center border border-espresso/10 space-y-2">
+            <p class="text-3xl">🧁</p>
+            <p class="font-serif font-bold text-espresso">Tidak ada pesanan PO ditemukan</p>
+            <p class="text-xs text-espresso/60">Klik tombol "Catat PO" di pojok kanan atas untuk menambah pesanan baru.</p>
+          </div>`;
+        return;
+      }
+
+      container.innerHTML = list.map(order => {
+        const subtotal = getOrderSubtotal(order);
+        const total = getOrderTotal(order);
+        const remaining = getOrderRemaining(order);
+
+        const sourceBadge = order.source === 'Instagram'
+          ? `<span class="px-2 py-0.5 rounded-md bg-pink-50 text-pink-700 border border-pink-200 text-[10px] font-bold">Instagram</span>`
+          : `<span class="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-bold">WhatsApp</span>`;
+
+        const payBadge = order.paymentStatus === 'Lunas'
+          ? `<span class="px-2.5 py-0.5 rounded-full bg-sageBg text-sage text-[11px] font-bold">Lunas (${order.bankName})</span>`
+          : order.paymentStatus === 'DP'
+          ? `<span class="px-2.5 py-0.5 rounded-full bg-amberBg text-amber-800 text-[11px] font-bold">DP ${formatRupiah(order.dpAmount)} • Sisa ${formatRupiah(remaining)}</span>`
+          : `<span class="px-2.5 py-0.5 rounded-full bg-red-100 text-red-700 text-[11px] font-bold">Belum Bayar</span>`;
+
+        const itemsHTML = order.items.map(item => `
+          <div class="flex justify-between text-xs text-espresso/80">
+            <span>${item.qty}x ${item.name}</span>
+            <span class="font-medium">${formatRupiah(item.price * item.qty)}</span>
+          </div>
+        `).join('');
+
+        return `
+          <div class="bg-white rounded-2xl p-4 md:p-5 border border-espresso/10 shadow-sm flex flex-col justify-between space-y-4">
+            <div class="space-y-3">
+              <div class="flex items-start justify-between gap-2">
+                <div>
+                  <div class="flex items-center gap-2 flex-wrap">
+                    <h4 class="font-bold text-base text-espresso">${order.customerName}</h4>
+                    ${sourceBadge}
+                  </div>
+                  <p class="text-xs text-espresso/60 mt-0.5">${order.contact || '-'} • Kirim: <b class="text-espresso">${formatDateID(order.deliveryDate)}</b></p>
+                </div>
+                <span class="px-2.5 py-1 rounded-xl bg-creamDark text-espresso text-xs font-bold shrink-0">
+                  ${order.courier === 'Pickup' ? '🏠 Pickup' : `🛵 ${order.courier}`}
+                </span>
+              </div>
+
+              <div class="p-3 rounded-xl bg-cream/70 border border-espresso/5 space-y-1.5">
+                ${itemsHTML}
+                <div class="pt-1.5 border-t border-espresso/10 flex justify-between text-xs text-espresso/60">
+                  <span>Ongkos Kirim (${order.courier})</span>
+                  <span>${formatRupiah(order.shippingFee)}</span>
+                </div>
+                <div class="flex justify-between text-sm font-bold text-espresso pt-0.5">
+                  <span>Total Pesanan</span>
+                  <span>${formatRupiah(total)}</span>
+                </div>
+              </div>
+
+              ${order.address ? `<p class="text-xs text-espresso/70 flex items-start gap-1.5"><i data-lucide="map-pin" class="w-3.5 h-3.5 text-terracotta shrink-0 mt-0.5"></i><span>${order.address}</span></p>` : ''}
+
+              <div class="flex items-center justify-between flex-wrap gap-2">
+                ${payBadge}
+                <span class="text-[11px] font-semibold text-espresso/70">Status: <b>${order.fulfillmentStatus}</b></span>
+              </div>
+            </div>
+
+            <!-- Action Footer -->
+            <div class="pt-3 border-t border-espresso/10 flex items-center justify-between gap-2">
+              <button onclick="openReceiptModal('${order.id}')" class="flex-1 py-2 px-3 rounded-xl bg-terracotta hover:bg-terracottaDark text-white text-xs font-semibold flex items-center justify-center gap-1.5 transition">
+                <i data-lucide="share-2" class="w-3.5 h-3.5"></i>
+                <span>Salin Nota WA/IG</span>
+              </button>
+
+              ${order.paymentStatus !== 'Lunas' ? `
+                <button onclick="markOrderPaid('${order.id}')" title="Tandai Lunas" class="py-2 px-3 rounded-xl bg-sageBg hover:bg-sage text-sage hover:text-white text-xs font-bold transition">
+                  Lunasi
+                </button>` : ''}
+
+              <button onclick="openOrderModal('${order.id}')" title="Edit Pesanan" class="p-2 rounded-xl bg-creamDark hover:bg-espresso/10 text-espresso">
+                <i data-lucide="pencil" class="w-4 h-4"></i>
+              </button>
+              <button onclick="confirmDeleteOrder('${order.id}')" title="Hapus Pesanan" class="p-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600">
+                <i data-lucide="trash-2" class="w-4 h-4"></i>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      lucide.createIcons();
+    }
+
+    function markOrderPaid(orderId) {
+      const idx = appData.orders.findIndex(o => o.id === orderId);
+      if (idx !== -1) {
+        appData.orders[idx].paymentStatus = 'Lunas';
+        appData.orders[idx].dpAmount = getOrderTotal(appData.orders[idx]);
+        saveData();
+        renderOrders();
+        renderDashboard();
+        showToast('Pembayaran ditandai Lunas!');
+      }
+    }
+
+    // Modal Input / Edit Order
+    function openOrderModal(orderId = null) {
+      const form = document.getElementById('orderForm');
+      form.reset();
+
+      // Populate dropdown katalog menu
+      const picker = document.getElementById('menuPickerSelect');
+      picker.innerHTML = appData.menus.map(m => `<option value="${m.id}">${m.name} — ${formatRupiah(m.price)}</option>`).join('');
+
+      if (orderId) {
+        const order = appData.orders.find(o => o.id === orderId);
+        if (!order) return;
+        document.getElementById('orderModalTitle').textContent = 'Edit Pesanan PO';
+        document.getElementById('editOrderId').value = order.id;
+        document.getElementById('ordCustomerName').value = order.customerName;
+        document.getElementById('ordContact').value = order.contact || '';
+        document.getElementById('ordDeliveryDate').value = order.deliveryDate;
+        document.getElementById('ordShippingFee').value = order.shippingFee || 0;
+        document.getElementById('ordAddress').value = order.address || '';
+        document.getElementById('ordBankName').value = order.bankName || 'BCA';
+        document.getElementById('ordPaymentStatus').value = order.paymentStatus;
+        document.getElementById('ordDpAmount').value = order.dpAmount || 0;
+        document.getElementById('ordFulfillmentStatus').value = order.fulfillmentStatus || 'Antrean';
+
+        document.querySelectorAll('input[name="ordSource"]').forEach(r => r.checked = (r.value === order.source));
+        document.querySelectorAll('input[name="ordCourier"]').forEach(r => r.checked = (r.value === order.courier));
+
+        draftOrderItems = order.items.map(i => ({ ...i }));
+      } else {
+        document.getElementById('orderModalTitle').textContent = 'Catat Pesanan PO Baru';
+        document.getElementById('editOrderId').value = '';
+        document.getElementById('ordDeliveryDate').value = getTomorrowISO();
+        document.getElementById('ordShippingFee').value = 0;
+        document.getElementById('ordPaymentStatus').value = 'Belum Bayar';
+        document.getElementById('ordDpAmount').value = 0;
+        draftOrderItems = [];
+        if (appData.menus.length > 0) {
+          const first = appData.menus[0];
+          draftOrderItems.push({ menuId: first.id, name: first.name, price: first.price, qty: 1 });
+        }
+      }
+
+      handlePaymentStatusChange();
+      renderDraftOrderItems();
+      document.getElementById('orderModal').classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    function closeOrderModal() {
+      document.getElementById('orderModal').classList.add('hidden');
+    }
+
+    function addSelectedMenuToOrder() {
+      const menuId = document.getElementById('menuPickerSelect').value;
+      const menu = appData.menus.find(m => m.id === menuId);
+      if (!menu) return;
+
+      const existing = draftOrderItems.find(i => i.menuId === menu.id && i.price === menu.price);
+      if (existing) {
+        existing.qty += 1;
+      } else {
+        draftOrderItems.push({ menuId: menu.id, name: menu.name, price: Number(menu.price), qty: 1 });
+      }
+      renderDraftOrderItems();
+    }
+
+    function updateDraftItemQty(index, delta) {
+      if (!draftOrderItems[index]) return;
+      draftOrderItems[index].qty += delta;
+      if (draftOrderItems[index].qty <= 0) {
+        draftOrderItems.splice(index, 1);
+      }
+      renderDraftOrderItems();
+    }
+
+    function renderDraftOrderItems() {
+      const container = document.getElementById('orderItemsContainer');
+      if (draftOrderItems.length === 0) {
+        container.innerHTML = `<p class="text-xs text-espresso/50 text-center py-3 bg-cream rounded-xl">Belum ada menu dipilih. Pilih menu di atas lalu klik + Tambah.</p>`;
+      } else {
+        container.innerHTML = draftOrderItems.map((item, idx) => `
+          <div class="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-cream border border-espresso/10">
+            <div class="min-w-0 flex-1">
+              <p class="text-xs font-bold text-espresso truncate">${item.name}</p>
+              <p class="text-[11px] text-espresso/60">${formatRupiah(item.price)} / pcs</p>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button type="button" onclick="updateDraftItemQty(${idx}, -1)" class="w-7 h-7 rounded-lg bg-white border border-espresso/15 font-bold text-espresso flex items-center justify-center">-</button>
+              <span class="text-xs font-bold w-5 text-center">${item.qty}</span>
+              <button type="button" onclick="updateDraftItemQty(${idx}, 1)" class="w-7 h-7 rounded-lg bg-espresso text-white font-bold flex items-center justify-center">+</button>
+            </div>
+          </div>
+        `).join('');
+      }
+      recalculateOrderTotals();
+    }
+
+    function handleCourierChange() {
+      const courier = document.querySelector('input[name="ordCourier"]:checked')?.value;
+      const feeInput = document.getElementById('ordShippingFee');
+      if (courier === 'Pickup') {
+        feeInput.value = 0;
+      }
+      recalculateOrderTotals();
+    }
+
+    function handlePaymentStatusChange() {
+      const status = document.getElementById('ordPaymentStatus').value;
+      const dpWrapper = document.getElementById('dpAmountWrapper');
+      if (status === 'DP') {
+        dpWrapper.classList.remove('hidden');
+      } else {
+        dpWrapper.classList.add('hidden');
+      }
+      recalculateOrderTotals();
+    }
+
+    function recalculateOrderTotals() {
+      const subtotal = draftOrderItems.reduce((s, i) => s + (i.price * i.qty), 0);
+      const shipping = Number(document.getElementById('ordShippingFee').value) || 0;
+      const grandTotal = subtotal + shipping;
+      const dp = Number(document.getElementById('ordDpAmount').value) || 0;
+      const remaining = Math.max(0, grandTotal - dp);
+
+      document.getElementById('modalSubtotalText').textContent = formatRupiah(subtotal);
+      document.getElementById('modalShippingText').textContent = formatRupiah(shipping);
+      document.getElementById('modalGrandTotalText').textContent = formatRupiah(grandTotal);
+      document.getElementById('ordRemainingDisplay').textContent = formatRupiah(remaining);
+    }
+
+    function handleSaveOrder(e) {
+      e.preventDefault();
+      if (draftOrderItems.length === 0) {
+        showToast('Pilih minimal 1 item menu terlebih dahulu!');
+        return;
+      }
+
+      const editId = document.getElementById('editOrderId').value;
+      const paymentStatus = document.getElementById('ordPaymentStatus').value;
+      const subtotal = draftOrderItems.reduce((s, i) => s + (i.price * i.qty), 0);
+      const shippingFee = Number(document.getElementById('ordShippingFee').value) || 0;
+      const grandTotal = subtotal + shippingFee;
+
+      const orderObj = {
+        id: editId || 'ord-' + Date.now(),
+        customerName: document.getElementById('ordCustomerName').value.trim(),
+        contact: document.getElementById('ordContact').value.trim(),
+        source: document.querySelector('input[name="ordSource"]:checked')?.value || 'WhatsApp',
+        deliveryDate: document.getElementById('ordDeliveryDate').value,
+        items: draftOrderItems.map(i => ({ ...i })),
+        courier: document.querySelector('input[name="ordCourier"]:checked')?.value || 'Pickup',
+        shippingFee: shippingFee,
+        address: document.getElementById('ordAddress').value.trim(),
+        bankName: document.getElementById('ordBankName').value.trim() || 'Transfer Bank',
+        paymentStatus: paymentStatus,
+        dpAmount: paymentStatus === 'Lunas' ? grandTotal : paymentStatus === 'DP' ? (Number(document.getElementById('ordDpAmount').value) || 0) : 0,
+        fulfillmentStatus: document.getElementById('ordFulfillmentStatus').value,
+        createdAt: getTodayISO()
+      };
+
+      if (editId) {
+        const idx = appData.orders.findIndex(o => o.id === editId);
+        if (idx !== -1) appData.orders[idx] = orderObj;
+        showToast('Pesanan PO berhasil diperbarui!');
+      } else {
+        appData.orders.unshift(orderObj);
+        showToast('Pesanan PO baru berhasil dicatat!');
+      }
+
+      saveData();
+      closeOrderModal();
+      renderDashboard();
+      renderOrders();
+
+      // Otomatis tampilkan preview nota agar user bisa langsung salin untuk pelanggan
+      openReceiptModal(orderObj.id);
+    }
+
+    function confirmDeleteOrder(orderId) {
+      openConfirmDialog('Hapus Pesanan PO?', 'Data pesanan ini akan dihapus permanen dari catatan.', () => {
+        appData.orders = appData.orders.filter(o => o.id !== orderId);
+        saveData();
+        renderOrders();
+        renderDashboard();
+        showToast('Pesanan dihapus.');
+      });
+    }
+
+    // =========================================================================
+    // 7. KATALOG MENU & HARGA (EDITABLE)
+    // =========================================================================
+    function renderMenus() {
+      const container = document.getElementById('menuListContainer');
+      if (appData.menus.length === 0) {
+        container.innerHTML = `<div class="col-span-full bg-white p-8 rounded-2xl text-center text-xs text-espresso/60">Belum ada menu. Klik "Tambah Menu Baru".</div>`;
+        return;
+      }
+
+      // Hitung qty PO aktif per menu
+      const activeOrders = appData.orders.filter(o => o.fulfillmentStatus !== 'Dikirim');
+      const orderedMap = {};
+      activeOrders.forEach(o => {
+        o.items.forEach(i => {
+          orderedMap[i.menuId] = (orderedMap[i.menuId] || 0) + Number(i.qty);
+        });
+      });
+
+      container.innerHTML = appData.menus.map(menu => {
+        const used = orderedMap[menu.id] || 0;
+        const sisa = Math.max(0, (Number(menu.batchQuota) || 0) - used);
+
+        return `
+          <div class="bg-white p-4 rounded-2xl border border-espresso/10 shadow-sm flex flex-col justify-between space-y-4">
+            <div>
+              <div class="flex items-center justify-between gap-2 mb-2">
+                <span class="px-2.5 py-0.5 rounded-full bg-creamDark text-espresso text-[10px] font-bold">${menu.category}</span>
+                <span class="text-[11px] font-semibold ${sisa > 0 ? 'text-sage' : 'text-amber-700'}">Sisa Kuota: ${sisa}/${menu.batchQuota}</span>
+              </div>
+              <h4 class="font-serif font-bold text-base text-espresso leading-snug">${menu.name}</h4>
+              <p class="text-lg font-bold text-terracotta mt-2">${formatRupiah(menu.price)}</p>
+            </div>
+
+            <div class="pt-3 border-t border-espresso/10 flex items-center justify-between gap-2">
+              <button onclick="openMenuModal('${menu.id}')" class="flex-1 py-2 px-3 rounded-xl bg-creamDark hover:bg-espresso hover:text-white text-espresso text-xs font-semibold flex items-center justify-center gap-1.5 transition">
+                <i data-lucide="edit-3" class="w-3.5 h-3.5"></i>
+                <span>Edit Harga / Kuota</span>
+              </button>
+              <button onclick="confirmDeleteMenu('${menu.id}')" class="p-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600">
+                <i data-lucide="trash-2" class="w-4 h-4"></i>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      lucide.createIcons();
+    }
+
+    function openMenuModal(menuId = null) {
+      if (menuId) {
+        const m = appData.menus.find(x => x.id === menuId);
+        if (!m) return;
+        document.getElementById('menuModalTitle').textContent = 'Edit Menu & Harga';
+        document.getElementById('editMenuId').value = m.id;
+        document.getElementById('menuName').value = m.name;
+        document.getElementById('menuCategory').value = m.category;
+        document.getElementById('menuPrice').value = m.price;
+        document.getElementById('menuQuota').value = m.batchQuota;
+      } else {
+        document.getElementById('menuModalTitle').textContent = 'Tambah Menu Baru';
+        document.getElementById('editMenuId').value = '';
+        document.getElementById('menuName').value = '';
+        document.getElementById('menuCategory').value = 'Kue Kering';
+        document.getElementById('menuPrice').value = '';
+        document.getElementById('menuQuota').value = 20;
+      }
+      document.getElementById('menuModal').classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    function closeMenuModal() {
+      document.getElementById('menuModal').classList.add('hidden');
+    }
+
+    function handleSaveMenu(e) {
+      e.preventDefault();
+      const editId = document.getElementById('editMenuId').value;
+      const menuObj = {
+        id: editId || 'm-' + Date.now(),
+        name: document.getElementById('menuName').value.trim(),
+        category: document.getElementById('menuCategory').value.trim() || 'Umum',
+        price: Number(document.getElementById('menuPrice').value) || 0,
+        batchQuota: Number(document.getElementById('menuQuota').value) || 0
+      };
+
+      if (editId) {
+        const idx = appData.menus.findIndex(m => m.id === editId);
+        if (idx !== -1) appData.menus[idx] = menuObj;
+        showToast('Harga & detail menu berhasil diperbarui!');
+      } else {
+        appData.menus.push(menuObj);
+        showToast('Menu baru ditambahkan ke katalog!');
+      }
+
+      saveData();
+      closeMenuModal();
+      renderMenus();
+      renderDashboard();
+    }
+
+    function confirmDeleteMenu(menuId) {
+      openConfirmDialog('Hapus Menu?', 'Menu akan dihapus dari katalog (pesanan lama tetap aman).', () => {
+        appData.menus = appData.menus.filter(m => m.id !== menuId);
+        saveData();
+        renderMenus();
+        renderDashboard();
+        showToast('Menu dihapus.');
+      });
+    }
+
+    // =========================================================================
+    // 8. PENGELUARAN (BAHAN BAKU & OPERASIONAL)
+    // =========================================================================
+    function handleSaveExpense(e) {
+      e.preventDefault();
+      const expObj = {
+        id: 'exp-' + Date.now(),
+        date: document.getElementById('expDate').value,
+        category: document.querySelector('input[name="expCategory"]:checked')?.value || 'Bahan Baku',
+        title: document.getElementById('expTitle').value.trim(),
+        amount: Number(document.getElementById('expAmount').value) || 0
+      };
+
+      appData.expenses.unshift(expObj);
+      saveData();
+      document.getElementById('expTitle').value = '';
+      document.getElementById('expAmount').value = '';
+      renderExpenses();
+      renderDashboard();
+      showToast('Pengeluaran berhasil dicatat!');
+    }
+
+    function renderExpenses() {
+      const filterCat = document.getElementById('expFilterCategory').value;
+      const totalBahan = appData.expenses.filter(e => e.category === 'Bahan Baku').reduce((s, e) => s + Number(e.amount), 0);
+      const totalOps = appData.expenses.filter(e => e.category === 'Operasional').reduce((s, e) => s + Number(e.amount), 0);
+
+      document.getElementById('totalIngredientExp').textContent = formatRupiah(totalBahan);
+      document.getElementById('totalOperationalExp').textContent = formatRupiah(totalOps);
+
+      let list = [...appData.expenses].sort((a, b) => b.date.localeCompare(a.date));
+      if (filterCat !== 'all') {
+        list = list.filter(e => e.category === filterCat);
+      }
+
+      const container = document.getElementById('expenseListContainer');
+      if (list.length === 0) {
+        container.innerHTML = `<div class="p-8 text-center text-xs text-espresso/50">Belum ada catatan pengeluaran pada kategori ini.</div>`;
+        return;
+      }
+
+      container.innerHTML = list.map(exp => {
+        const isBahan = exp.category === 'Bahan Baku';
+        return `
+          <div class="p-4 flex items-center justify-between gap-3 hover:bg-cream/50 transition">
+            <div class="flex items-start gap-3 min-w-0">
+              <div class="w-9 h-9 rounded-xl ${isBahan ? 'bg-amberBg text-amber-800' : 'bg-espresso/10 text-espresso'} flex items-center justify-center shrink-0 text-base">
+                ${isBahan ? '🧈' : '📦'}
+              </div>
+              <div class="min-w-0">
+                <p class="text-xs font-bold text-espresso truncate">${exp.title}</p>
+                <p class="text-[11px] text-espresso/60 mt-0.5">${formatDateID(exp.date)} • <span class="font-semibold">${exp.category}</span></p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2.5 shrink-0">
+              <span class="text-xs font-bold text-red-700">-${formatRupiah(exp.amount)}</span>
+              <button onclick="deleteExpense('${exp.id}')" class="p-1.5 rounded-lg text-espresso/40 hover:text-red-600 hover:bg-red-50">
+                <i data-lucide="trash-2" class="w-4 h-4"></i>
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      lucide.createIcons();
+    }
+
+    function deleteExpense(expId) {
+      openConfirmDialog('Hapus Catatan Pengeluaran?', 'Nominal pengeluaran ini akan dihapus dari laporan.', () => {
+        appData.expenses = appData.expenses.filter(e => e.id !== expId);
+        saveData();
+        renderExpenses();
+        renderDashboard();
+        showToast('Pengeluaran dihapus.');
+      });
+    }
+
+    // =========================================================================
+    // 9. SETTINGS & BACKUP JSON
+    // =========================================================================
+    function renderSettings() {
+      document.getElementById('setBakeryName').value = appData.settings.bakeryName || '';
+      document.getElementById('setWhatsapp').value = appData.settings.whatsapp || '';
+      document.getElementById('setBankDetails').value = appData.settings.bankDetails || '';
+    }
+
+    function handleSaveSettings(e) {
+      e.preventDefault();
+      appData.settings.bakeryName = document.getElementById('setBakeryName').value.trim() || 'Artisan Bakehouse';
+      appData.settings.whatsapp = document.getElementById('setWhatsapp').value.trim();
+      appData.settings.bankDetails = document.getElementById('setBankDetails').value.trim();
+      saveData();
+      updateBrandTitles();
+      showToast('Pengaturan bakery berhasil disimpan!');
+    }
+
+    function updateBrandTitles() {
+      const name = appData.settings.bakeryName || 'Artisan Bakehouse';
+      document.getElementById('sidebarBakeryName').textContent = name;
+      document.getElementById('mobileBakeryName').textContent = name;
+    }
+
+    function exportBackupJSON() {
+      const dataStr = JSON.stringify(appData, null, 2);
+      const blob = new Blob([dataStr], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `backup-po-bakery-${getTodayISO()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('File backup JSON berhasil diunduh!');
+    }
+
+    function importBackupJSON(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function (e) {
+        try {
+          const parsed = JSON.parse(e.target.result);
+          if (!parsed.menus || !parsed.orders || !parsed.expenses) {
+            throw new Error('Format file tidak valid');
+          }
+          appData = parsed;
+          saveData();
+          updateBrandTitles();
+          renderDashboard();
+          showToast('Data backup berhasil dipulihkan!');
+        } catch (err) {
+          showToast('File JSON tidak valid atau rusak!');
+        }
+      };
+      reader.readAsText(file);
+      event.target.value = '';
+    }
+
+    // Custom Confirmation Dialog
+    let pendingConfirmCallback = null;
+    function openConfirmDialog(title, message, onConfirm) {
+      document.getElementById('confirmTitle').textContent = title;
+      document.getElementById('confirmMessage').textContent = message;
+      pendingConfirmCallback = onConfirm;
+      document.getElementById('confirmModal').classList.remove('hidden');
+      lucide.createIcons();
+    }
+
+    function closeConfirmModal() {
+      document.getElementById('confirmModal').classList.add('hidden');
+      pendingConfirmCallback = null;
+    }
+
+    document.getElementById('confirmActionBtn').addEventListener('click', () => {
+      if (pendingConfirmCallback) pendingConfirmCallback();
+      closeConfirmModal();
+    });
+
+    function openConfirmReset() {
+      openConfirmDialog('Reset Semua Data?', 'Semua data transaksi saat ini akan diganti dengan data contoh awal.', () => {
+        appData = getDefaultData();
+        saveData();
+        updateBrandTitles();
+        renderDashboard();
+        renderOrders();
+        renderMenus();
+        renderExpenses();
+        renderSettings();
+        showToast('Data di-reset ke contoh awal.');
+      });
+    }
+
+    // =========================================================================
+    // 10. INITIAL BOOTSTRAP
+    // =========================================================================
+    window.addEventListener('DOMContentLoaded', () => {
+      const todayFormatted = new Date().toLocaleDateString('id-ID', {
+        weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+      });
+      document.getElementById('currentDateDisplay').textContent = todayFormatted;
+      document.getElementById('mobileDateDisplay').textContent = todayFormatted;
+      document.getElementById('expDate').value = getTodayISO();
+
+      updateBrandTitles();
+      renderDashboard();
+      lucide.createIcons();
+    });
+  </script>
+</body>
+</html>
