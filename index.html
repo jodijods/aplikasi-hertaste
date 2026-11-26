@@ -1124,90 +1124,14 @@
         throw new Error('URL harus berakhiran /exec.');
       }
 
-      const fullPayload = Object.assign({}, payloadObj, { token });
-      const rawJson = JSON.stringify(fullPayload);
-      try {
-        const response = await fetch(urlStr, {
-          method: 'POST',
-          redirect: 'follow',
-          cache: 'no-store',
-          keepalive: true,
-          headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: rawJson
-        });
-        const text = await response.text();
-        let data;
-        try {
-          data = JSON.parse(text);
-        } catch (_) {
-          throw new Error('NON_JSON_REDIRECT');
-        }
-        if (!response.ok || !data.ok) {
-          throw new Error(data.error || `HTTP ${response.status}`);
-        }
-        return data;
-      } catch (err) {
-        if (err && err.message && err.message !== 'NON_JSON_REDIRECT' && !String(err.message).toLowerCase().includes('fetch')) {
-          throw err;
-        }
-        return await gasFormIframePost(urlStr, fullPayload);
-      }
-    }
-
-    function gasFormIframePost(urlStr, fullPayload) {
-      return new Promise((resolve, reject) => {
-        try {
-          const mountTarget = document.body || document.documentElement;
-          if (!mountTarget) {
-            reject(new Error('DOM belum siap untuk mengirim data.'));
-            return;
-          }
-          const frameName = 'gas_post_frame_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
-          const iframeEl = document.createElement('iframe');
-          iframeEl.name = frameName;
-          iframeEl.style.display = 'none';
-
-          const formEl = document.createElement('form');
-          formEl.method = 'POST';
-          formEl.action = urlStr;
-          formEl.target = frameName;
-          formEl.style.display = 'none';
-
-          const payloadInput = document.createElement('input');
-          payloadInput.type = 'hidden';
-          payloadInput.name = 'payload';
-          payloadInput.value = JSON.stringify(fullPayload);
-          formEl.appendChild(payloadInput);
-
-          mountTarget.appendChild(iframeEl);
-          mountTarget.appendChild(formEl);
-
-          let settled = false;
-          const cleanup = () => {
-            try {
-              if (formEl.parentNode) formEl.parentNode.removeChild(formEl);
-              if (iframeEl.parentNode) iframeEl.parentNode.removeChild(iframeEl);
-            } catch (_) {}
-          };
-
-          iframeEl.onload = () => {
-            if (settled) return;
-            settled = true;
-            setTimeout(cleanup, 300);
-            resolve({ ok: true, fallback: 'iframe-post' });
-          };
-
-          setTimeout(() => {
-            if (settled) return;
-            settled = true;
-            cleanup();
-            resolve({ ok: true, fallback: 'iframe-timeout' });
-          }, 4500);
-
-          formEl.submit();
-        } catch (formErr) {
-          reject(formErr);
-        }
+      // Gunakan jalur GET (JSONP/Fetch) yang sudah terbukti bebas redirect & bebas error doPost
+      const compactPayload = {
+        action: payloadObj.action || 'syncAll',
+        data: payloadObj.data || {},
+        snapshot: payloadObj.snapshot || {}
+      };
+      return await gasGetRequest(compactPayload.action, {
+        payload: JSON.stringify(compactPayload)
       });
     }
 
