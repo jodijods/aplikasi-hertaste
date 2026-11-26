@@ -506,15 +506,15 @@
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
           <div>
             <label class="block text-xs font-semibold text-espresso mb-1">Nama Pemesan *</label>
-            <input type="text" id="ordCustomerName" required placeholder="Contoh: Ibu Rina (WA)" class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-espresso/15 text-sm focus:outline-none focus:border-terracotta" />
+            <input type="text" id="ordCustomerName" required placeholder="Contoh: Ibu Melati" class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-espresso/15 text-sm focus:outline-none focus:border-terracotta" />
           </div>
           <div>
-            <label class="block text-xs font-semibold text-espresso mb-1">No. WhatsApp / Kontak</label>
-            <input type="text" id="ordCustomerPhone" placeholder="0812xxxx" class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-espresso/15 text-sm focus:outline-none focus:border-terracotta" />
+            <label class="block text-xs font-semibold text-espresso mb-1">No. WhatsApp Pelanggan</label>
+            <input type="tel" id="ordCustomerPhone" placeholder="Contoh: 081234567890" class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-espresso/15 text-sm focus:outline-none focus:border-terracotta" />
           </div>
         </div>
 
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
           <div>
             <label class="block text-xs font-semibold text-espresso mb-1">Tanggal Kirim / Ambil *</label>
             <input type="date" id="ordDeliveryDate" required class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-espresso/15 text-sm font-semibold focus:outline-none focus:border-terracotta" />
@@ -522,19 +522,10 @@
           <div>
             <label class="block text-xs font-semibold text-espresso mb-1">Metode Pengiriman</label>
             <select id="ordDeliveryMethod" class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-espresso/15 text-sm focus:outline-none focus:border-terracotta">
-              <option value="Ambil di Rumah">Ambil di Rumah</option>
+              <option value="Pick Up">Pick Up</option>
               <option value="GoSend / GrabExpress">GoSend / GrabExpress</option>
               <option value="Kurir Pribadi">Kurir Pribadi</option>
               <option value="Ekspedisi / Paxel">Ekspedisi / Paxel</option>
-            </select>
-          </div>
-          <div>
-            <label class="block text-xs font-semibold text-espresso mb-1">Status Produksi</label>
-            <select id="ordFulfillmentStatus" class="w-full px-3.5 py-2.5 rounded-xl bg-white border border-espresso/15 text-sm font-semibold focus:outline-none focus:border-terracotta">
-              <option value="Antrean">Antrean</option>
-              <option value="Dipanggang">Dipanggang</option>
-              <option value="Siap Kirim">Siap Kirim</option>
-              <option value="Selesai">Selesai</option>
             </select>
           </div>
         </div>
@@ -865,7 +856,7 @@
             customerName: 'Kak Dimas',
             customerPhone: '085712349876',
             deliveryDate: tomorrow,
-            deliveryMethod: 'Ambil di Rumah',
+            deliveryMethod: 'Pick Up',
             fulfillmentStatus: 'Antrean',
             items: [
               { menuId: 'm2', name: 'Kastengel Keju Edam (500gr)', qty: 3, price: 155000 },
@@ -919,10 +910,21 @@
     let currentTab = 'dashboard';
     let orderStatusFilter = 'ALL';
     let confirmCallback = null;
+    let lastLocalMutationAt = Number(localStorage.getItem('dapur_po_last_mutation') || 0);
+
+    function markLocalMutation() {
+      lastLocalMutationAt = Date.now();
+      try {
+        localStorage.setItem('dapur_po_last_mutation', String(lastLocalMutationAt));
+      } catch (_) {}
+    }
 
     function saveData(options = {}) {
       const { skipAutoSync = false, syncAction = 'syncAll', syncPayload = null } = options;
       try {
+        if (!skipAutoSync) {
+          markLocalMutation();
+        }
         localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
         updateSyncStatusUI();
         if (!skipAutoSync && appData.sync && appData.sync.autoSync && hasGasConfig()) {
@@ -1258,10 +1260,16 @@
         const snapRes = await gasGetRequest('snapshot');
         if (snapRes && snapRes.snapshot) {
           const snap = snapRes.snapshot;
-          if (snap.settings) appData.settings = Object.assign({}, appData.settings, snap.settings);
-          if (Array.isArray(snap.menus)) appData.menus = snap.menus;
-          if (Array.isArray(snap.orders)) appData.orders = snap.orders;
-          if (Array.isArray(snap.expenses)) appData.expenses = snap.expenses;
+          const hasRemoteContent =
+            (Array.isArray(snap.orders) && snap.orders.length > 0) ||
+            (Array.isArray(snap.menus) && snap.menus.length > 0) ||
+            (Array.isArray(snap.expenses) && snap.expenses.length > 0);
+          if (!silent || hasRemoteContent) {
+            if (snap.settings) appData.settings = Object.assign({}, appData.settings, snap.settings);
+            if (Array.isArray(snap.menus)) appData.menus = snap.menus;
+            if (Array.isArray(snap.orders)) appData.orders = snap.orders;
+            if (Array.isArray(snap.expenses)) appData.expenses = snap.expenses;
+          }
         } else {
           const allRes = await gasGetRequest('all');
           const d = allRes.data || {};
@@ -1280,7 +1288,7 @@
               orderCode: o.orderCode || o.id,
               customerName: o.customerName || '',
               customerPhone: o.customerPhone || '',
-              deliveryMethod: o.deliveryMethod || 'Ambil di Rumah',
+              deliveryMethod: o.deliveryMethod || 'Pick Up',
               deliveryDate: o.deliveryDate || getTodayISO(),
               items: Array.isArray(o.items) ? o.items : [],
               shippingFee: Number(o.shippingCost) || 0,
@@ -1348,7 +1356,7 @@
           orderCode: o.orderCode || o.id,
           customerName: o.customerName,
           channel: 'WhatsApp',
-          deliveryMethod: o.deliveryMethod || 'Ambil di Rumah',
+          deliveryMethod: o.deliveryMethod || 'Pick Up',
           deliveryDate: o.deliveryDate,
           items: o.items || [],
           itemsJson: JSON.stringify(o.items || []),
@@ -1465,6 +1473,8 @@
       if (!hasGasConfig()) return;
       if (appData.sync && appData.sync.autoSync === false) return;
       if (isSyncInProgress || autoSyncTimer || isUserEditingModal()) return;
+      // Jangan timpa data lokal dengan auto-pull jika baru saja ada perubahan dalam 15 detik terakhir
+      if (Date.now() - lastLocalMutationAt < 15000) return;
       isSyncInProgress = true;
       try {
         await pullFromGoogleSheets(true);
@@ -1903,39 +1913,43 @@
     // =========================================================================
     // 6. ORDER MODAL (CREATE / EDIT)
     // =========================================================================
+    function setFieldVal(id, val) {
+      const el = document.getElementById(id);
+      if (el) el.value = val;
+    }
+
     function openOrderModal(orderId = null) {
       const modal = document.getElementById('orderModal');
       const itemsContainer = document.getElementById('orderItemsContainer');
+      if (!modal || !itemsContainer) return;
       itemsContainer.innerHTML = '';
 
       if (orderId) {
         const order = appData.orders.find(o => o.id === orderId);
         if (!order) return;
         document.getElementById('orderModalTitle').textContent = `Edit Pesanan ${order.orderCode}`;
-        document.getElementById('editOrderId').value = order.id;
-        document.getElementById('ordCustomerName').value = order.customerName;
-        document.getElementById('ordCustomerPhone').value = order.customerPhone || '';
-        document.getElementById('ordDeliveryDate').value = order.deliveryDate;
-        document.getElementById('ordDeliveryMethod').value = order.deliveryMethod || 'Ambil di Rumah';
-        document.getElementById('ordFulfillmentStatus').value = order.fulfillmentStatus || 'Antrean';
-        document.getElementById('ordShippingFee').value = order.shippingFee || 0;
-        document.getElementById('ordPaymentStatus').value = order.paymentStatus || 'Belum Bayar';
-        document.getElementById('ordDpAmount').value = order.dpAmount || 0;
-        document.getElementById('ordNotes').value = order.notes || '';
+        setFieldVal('editOrderId', order.id);
+        setFieldVal('ordCustomerName', order.customerName || '');
+        setFieldVal('ordCustomerPhone', order.customerPhone || '');
+        setFieldVal('ordDeliveryDate', order.deliveryDate || getTomorrowISO());
+        setFieldVal('ordDeliveryMethod', (order.deliveryMethod && order.deliveryMethod !== 'Ambil di Rumah') ? order.deliveryMethod : 'Pick Up');
+        setFieldVal('ordShippingFee', order.shippingFee || 0);
+        setFieldVal('ordPaymentStatus', order.paymentStatus || 'Belum Bayar');
+        setFieldVal('ordDpAmount', order.dpAmount || 0);
+        setFieldVal('ordNotes', order.notes || '');
 
         (order.items || []).forEach(it => addOrderItemRow(it.name, it.qty, it.price));
       } else {
         document.getElementById('orderModalTitle').textContent = 'Catat Pesanan PO Baru';
-        document.getElementById('editOrderId').value = '';
-        document.getElementById('ordCustomerName').value = '';
-        document.getElementById('ordCustomerPhone').value = '';
-        document.getElementById('ordDeliveryDate').value = getTomorrowISO();
-        document.getElementById('ordDeliveryMethod').value = 'Ambil di Rumah';
-        document.getElementById('ordFulfillmentStatus').value = 'Antrean';
-        document.getElementById('ordShippingFee').value = 0;
-        document.getElementById('ordPaymentStatus').value = 'Belum Bayar';
-        document.getElementById('ordDpAmount').value = 0;
-        document.getElementById('ordNotes').value = '';
+        setFieldVal('editOrderId', '');
+        setFieldVal('ordCustomerName', '');
+        setFieldVal('ordCustomerPhone', '');
+        setFieldVal('ordDeliveryDate', getTomorrowISO());
+        setFieldVal('ordDeliveryMethod', 'Pick Up');
+        setFieldVal('ordShippingFee', 0);
+        setFieldVal('ordPaymentStatus', 'Belum Bayar');
+        setFieldVal('ordDpAmount', 0);
+        setFieldVal('ordNotes', '');
 
         const firstMenu = appData.menus[0];
         if (firstMenu) {
@@ -1945,128 +1959,141 @@
         }
       }
 
-      toggleDpInput();
-      recalculateOrderModalTotal();
+      if (typeof toggleDpInput === 'function') toggleDpInput();
+      if (typeof recalculateOrderModalTotal === 'function') recalculateOrderModalTotal();
       modal.classList.remove('hidden');
       refreshIcons();
     }
 
     function closeOrderModal() {
-      document.getElementById('orderModal').classList.add('hidden');
+      const modal = document.getElementById('orderModal');
+      if (modal) modal.classList.add('hidden');
     }
 
-    function addOrderItemRow(name = '', qty = 1, price = 0) {
+    function addOrderItemRow(selectedName = '', qty = 1, price = 0) {
       const container = document.getElementById('orderItemsContainer');
+      if (!container) return;
       const row = document.createElement('div');
-      row.className = 'order-item-row grid grid-cols-12 gap-2 items-center bg-cream p-2.5 rounded-xl border border-espresso/10';
+      row.className = 'order-item-row grid grid-cols-12 gap-2 items-center bg-cream/70 p-2.5 rounded-xl border border-espresso/10';
 
-      const menuOptions = appData.menus.map(m =>
-        `<option value="${m.name}" data-price="${m.price}" ${m.name === name ? 'selected' : ''}>${m.name} (${formatRupiah(m.price)})</option>`
+      const menuOptions = (appData.menus || []).map(m =>
+        `<option value="${escapeHtml(m.name)}" data-price="${m.price}" ${m.name === selectedName ? 'selected' : ''}>${escapeHtml(m.name)} (${formatRupiah(m.price)})</option>`
       ).join('');
 
       row.innerHTML = `
         <div class="col-span-12 sm:col-span-6">
-          <select onchange="onSelectCatalogMenu(this)" class="item-menu-select w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-semibold text-espresso focus:outline-none">
-            <option value="">-- Pilih dari Katalog --</option>
+          <select onchange="onOrderMenuSelect(this)" class="ord-item-select w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-semibold focus:outline-none">
+            <option value="">-- Pilih Menu / Ketik Manual --</option>
             ${menuOptions}
-            <option value="__CUSTOM__" ${name && !appData.menus.some(m => m.name === name) ? 'selected' : ''}>+ Tulis Nama Kue Custom</option>
+            ${selectedName && !(appData.menus || []).some(m => m.name === selectedName)
+              ? `<option value="${escapeHtml(selectedName)}" data-price="${price}" selected>${escapeHtml(selectedName)}</option>`
+              : ''}
           </select>
-          <input type="text" value="${name}" placeholder="Nama kue..." class="item-name-input mt-1.5 w-full px-2.5 py-1.5 rounded-lg bg-white border border-espresso/15 text-xs ${name && !appData.menus.some(m => m.name === name) ? '' : 'hidden'}" />
         </div>
         <div class="col-span-4 sm:col-span-2">
-          <label class="block text-[10px] text-espresso/60 sm:hidden">Qty</label>
-          <input type="number" value="${qty}" min="1" oninput="recalculateOrderModalTotal()" class="item-qty-input w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-bold text-center tabular-nums" />
+          <input type="number" min="1" value="${qty}" oninput="recalculateOrderModalTotal()" class="ord-item-qty w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-bold text-center tabular-nums" placeholder="Qty" />
         </div>
         <div class="col-span-6 sm:col-span-3">
-          <label class="block text-[10px] text-espresso/60 sm:hidden">Harga Satuan</label>
-          <input type="number" value="${price}" min="0" step="500" oninput="recalculateOrderModalTotal()" class="item-price-input w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-semibold tabular-nums" />
+          <input type="number" min="0" step="500" value="${price}" oninput="recalculateOrderModalTotal()" class="ord-item-price w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-semibold tabular-nums" placeholder="Harga" />
         </div>
         <div class="col-span-2 sm:col-span-1 flex justify-end">
-          <button type="button" onclick="removeOrderItemRow(this)" class="p-1.5 rounded-lg text-red-500 hover:bg-red-100">
+          <button type="button" onclick="removeOrderItemRow(this)" class="p-1.5 rounded-lg text-red-600 hover:bg-red-50" title="Hapus Baris">
             <i data-lucide="trash-2" class="w-4 h-4"></i>
           </button>
         </div>
       `;
       container.appendChild(row);
       refreshIcons();
+      recalculateOrderModalTotal();
     }
 
-    function onSelectCatalogMenu(selectEl) {
+    function onOrderMenuSelect(selectEl) {
+      const opt = selectEl.options[selectEl.selectedIndex];
       const row = selectEl.closest('.order-item-row');
-      const nameInput = row.querySelector('.item-name-input');
-      const priceInput = row.querySelector('.item-price-input');
-      const val = selectEl.value;
-
-      if (val === '__CUSTOM__') {
-        nameInput.classList.remove('hidden');
-        nameInput.value = '';
-        nameInput.focus();
-      } else if (val) {
-        nameInput.classList.add('hidden');
-        nameInput.value = val;
-        const opt = selectEl.options[selectEl.selectedIndex];
-        priceInput.value = opt.dataset.price || 0;
+      if (!row || !opt) return;
+      const priceVal = Number(opt.dataset.price) || 0;
+      const priceInput = row.querySelector('.ord-item-price');
+      if (priceInput && priceVal > 0) {
+        priceInput.value = priceVal;
       }
       recalculateOrderModalTotal();
     }
 
     function removeOrderItemRow(btn) {
       const container = document.getElementById('orderItemsContainer');
-      if (container.children.length <= 1) {
+      const rows = container ? container.querySelectorAll('.order-item-row') : [];
+      if (rows.length <= 1) {
         showToast('Minimal harus ada 1 item kue.');
         return;
       }
-      btn.closest('.order-item-row').remove();
+      const row = btn.closest('.order-item-row');
+      if (row) row.remove();
       recalculateOrderModalTotal();
     }
 
     function toggleDpInput() {
-      const status = document.getElementById('ordPaymentStatus').value;
-      const wrapper = document.getElementById('dpAmountWrapper');
-      if (status === 'DP') wrapper.classList.remove('hidden');
-      else wrapper.classList.add('hidden');
+      const statusEl = document.getElementById('ordPaymentStatus');
+      const wrap = document.getElementById('dpAmountWrapper');
+      if (!statusEl || !wrap) return;
+      if (statusEl.value === 'DP') {
+        wrap.classList.remove('hidden');
+      } else {
+        wrap.classList.add('hidden');
+      }
+    }
+
+    function collectOrderModalItems() {
+      const rows = document.querySelectorAll('#orderItemsContainer .order-item-row');
+      const items = [];
+      rows.forEach(row => {
+        const sel = row.querySelector('.ord-item-select');
+        const qtyEl = row.querySelector('.ord-item-qty');
+        const priceEl = row.querySelector('.ord-item-price');
+        const name = sel ? sel.value.trim() : '';
+        const qty = Number(qtyEl ? qtyEl.value : 0) || 0;
+        const price = Number(priceEl ? priceEl.value : 0) || 0;
+        if (name && qty > 0) {
+          const matchedMenu = (appData.menus || []).find(m => m.name === name);
+          items.push({
+            menuId: matchedMenu ? matchedMenu.id : '',
+            name,
+            qty,
+            price
+          });
+        }
+      });
+      return items;
     }
 
     function recalculateOrderModalTotal() {
-      let subtotal = 0;
-      document.querySelectorAll('.order-item-row').forEach(row => {
-        const qty = Number(row.querySelector('.item-qty-input').value) || 0;
-        const price = Number(row.querySelector('.item-price-input').value) || 0;
-        subtotal += qty * price;
-      });
-      const shipping = Number(document.getElementById('ordShippingFee').value) || 0;
+      const items = collectOrderModalItems();
+      const subtotal = items.reduce((s, i) => s + i.qty * i.price, 0);
+      const shipping = Number(document.getElementById('ordShippingFee')?.value) || 0;
       const total = subtotal + shipping;
-      const payStatus = document.getElementById('ordPaymentStatus').value;
-      const dp = Number(document.getElementById('ordDpAmount').value) || 0;
+      const payStatus = document.getElementById('ordPaymentStatus')?.value || 'Belum Bayar';
+      const paid = payStatus === 'Lunas'
+        ? total
+        : payStatus === 'DP'
+        ? Math.min(total, Number(document.getElementById('ordDpAmount')?.value) || 0)
+        : 0;
+      const rem = Math.max(0, total - paid);
 
-      let remaining = total;
-      if (payStatus === 'Lunas') remaining = 0;
-      else if (payStatus === 'DP') remaining = Math.max(0, total - dp);
-
-      document.getElementById('modalOrderTotalText').textContent = formatRupiah(total);
-      document.getElementById('modalOrderRemainingText').textContent = formatRupiah(remaining);
+      const totEl = document.getElementById('modalOrderTotalText');
+      const remEl = document.getElementById('modalOrderRemainingText');
+      if (totEl) totEl.textContent = formatRupiah(total);
+      if (remEl) remEl.textContent = formatRupiah(rem);
     }
 
     function handleSaveOrder(e) {
       e.preventDefault();
-      const items = [];
-      document.querySelectorAll('.order-item-row').forEach(row => {
-        const selVal = row.querySelector('.item-menu-select').value;
-        const customVal = row.querySelector('.item-name-input').value.trim();
-        const finalName = (selVal && selVal !== '__CUSTOM__') ? selVal : customVal;
-        const qty = Number(row.querySelector('.item-qty-input').value) || 0;
-        const price = Number(row.querySelector('.item-price-input').value) || 0;
-        if (finalName && qty > 0) {
-          items.push({ name: finalName, qty, price });
-        }
-      });
-
+      const items = collectOrderModalItems();
       if (items.length === 0) {
-        showToast('Pilih atau isi minimal 1 nama kue!');
+        showToast('Pilih minimal 1 menu kue!');
         return;
       }
 
       const editId = document.getElementById('editOrderId').value;
+      const existingOrder = editId ? appData.orders.find(o => o.id === editId) : null;
       const shippingFee = Number(document.getElementById('ordShippingFee').value) || 0;
       const paymentStatus = document.getElementById('ordPaymentStatus').value;
       const subtotal = items.reduce((s, i) => s + i.qty * i.price, 0);
@@ -2079,94 +2106,92 @@
 
       const orderObj = {
         id: editId || 'ord-' + Date.now(),
-        orderCode: editId
-          ? (appData.orders.find(o => o.id === editId)?.orderCode || 'PO-' + Math.floor(100 + Math.random() * 900))
+        orderCode: existingOrder
+          ? (existingOrder.orderCode || 'PO-' + Math.floor(100 + Math.random() * 900))
           : 'PO-' + (101 + appData.orders.length),
         customerName: document.getElementById('ordCustomerName').value.trim(),
         customerPhone: document.getElementById('ordCustomerPhone').value.trim(),
         deliveryDate: document.getElementById('ordDeliveryDate').value,
         deliveryMethod: document.getElementById('ordDeliveryMethod').value,
-        fulfillmentStatus: document.getElementById('ordFulfillmentStatus').value,
+        fulfillmentStatus: existingOrder ? (existingOrder.fulfillmentStatus || 'Antrean') : 'Antrean',
         items,
         shippingFee,
         paymentStatus,
         dpAmount,
         notes: document.getElementById('ordNotes').value.trim(),
-        createdAt: getTodayISO()
+        createdAt: existingOrder ? (existingOrder.createdAt || getTodayISO()) : getTodayISO()
       };
 
       if (editId) {
         const idx = appData.orders.findIndex(o => o.id === editId);
         if (idx !== -1) appData.orders[idx] = orderObj;
-        showToast('Pesanan PO berhasil diperbarui!');
       } else {
         appData.orders.unshift(orderObj);
-        showToast('Pesanan PO baru berhasil dicatat!');
       }
 
       saveData({ syncAction: 'upsertOrder', syncPayload: orderObj });
       closeOrderModal();
       renderDashboard();
       renderOrders();
-      openReceiptModal(orderObj.id);
+      showToast(editId ? 'Pesanan PO diperbarui!' : 'Pesanan PO baru disimpan!');
     }
 
     function confirmDeleteOrder(orderId) {
-      openConfirmDialog('Hapus Pesanan PO?', 'Data pesanan ini akan dihapus permanen dari catatan.', async () => {
-        appData.orders = appData.orders.filter(o => o.id !== orderId);
-        saveData({ skipAutoSync: true });
-        if (hasGasConfig()) {
-          try {
-            await gasPostRequest({ action: 'deleteRow', sheet: 'Orders', id: orderId });
-            await pushAllToGoogleSheets(true);
-          } catch (err) {
-            recordSyncResult('error', `Gagal hapus di Sheets: ${err.message}`);
-          }
+      const order = appData.orders.find(o => o.id === orderId);
+      if (!order) return;
+      openConfirmDialog(
+        `Hapus Pesanan ${order.orderCode}?`,
+        `Pesanan atas nama ${order.customerName} akan dihapus permanen.`,
+        () => {
+          appData.orders = appData.orders.filter(o => o.id !== orderId);
+          saveData({ syncAction: 'syncAll' });
+          renderOrders();
+          renderDashboard();
+          showToast('Pesanan dihapus.');
         }
-        renderOrders();
-        renderDashboard();
-        showToast('Pesanan dihapus.');
-      });
+      );
     }
 
     // =========================================================================
-    // 6B. WHATSAPP RECEIPT & BLANK FORM TEMPLATES
+    // 7. WHATSAPP RECEIPT & BLANK FORM TEMPLATES
     // =========================================================================
     function openReceiptModal(orderId) {
-      const o = appData.orders.find(ord => ord.id === orderId);
-      if (!o) return;
+      const order = appData.orders.find(o => o.id === orderId);
+      if (!order) return;
 
-      const total = getOrderTotal(o);
-      const paid = getOrderPaid(o);
-      const remaining = getOrderRemaining(o);
+      const total = getOrderTotal(order);
+      const paid = getOrderPaid(order);
+      const rem = getOrderRemaining(order);
 
       const lines = [
-        `*KONFIRMASI PRE-ORDER — ${appData.settings.bakeryName.toUpperCase()}*`,
-        `No. Order: *${o.orderCode}*`,
-        `Pemesan: *${o.customerName}*`,
-        `Jadwal Kirim/Ambil: *${formatDateIndo(o.deliveryDate)}* (${o.deliveryMethod})`,
+        `*KONFIRMASI PESANAN PO - ${(appData.settings.bakeryName || 'Dapur PO').toUpperCase()}*`,
+        `Kode PO: *${order.orderCode}*`,
+        `Pemesan: *${order.customerName}*`,
+        `Jadwal Kirim: *${formatDateIndo(order.deliveryDate)}* (${order.deliveryMethod})`,
         `--------------------------------`,
-        ...o.items.map(i => `• ${i.qty}x ${i.name} — ${formatRupiah(i.qty * i.price)}`),
-        ...(Number(o.shippingFee) > 0 ? [`• Ongkos Kirim — ${formatRupiah(o.shippingFee)}`] : []),
+        ...(order.items || []).map(i => `• ${i.qty}x ${i.name} = ${formatRupiah(i.qty * i.price)}`),
+        ...(Number(order.shippingFee) > 0 ? [`• Ongkos Kirim = ${formatRupiah(order.shippingFee)}`] : []),
         `--------------------------------`,
         `*Total Tagihan: ${formatRupiah(total)}*`,
-        `Status Bayar: *${o.paymentStatus}*${paid > 0 ? ` (Masuk: ${formatRupiah(paid)})` : ''}`,
-        ...(remaining > 0 ? [`*Sisa Pelunasan: ${formatRupiah(remaining)}*`] : []),
-        ...(o.notes ? [`Catatan: ${o.notes}`] : []),
+        `Status Bayar: *${order.paymentStatus}*` + (order.paymentStatus === 'DP' ? ` (Masuk ${formatRupiah(paid)})` : ''),
+        ...(rem > 0 ? [`*Sisa Pelunasan: ${formatRupiah(rem)}*`] : []),
+        ...(order.notes ? [`Catatan: _${order.notes}_`] : []),
         ``,
-        ...(remaining > 0 ? [`Pembayaran dapat ditransfer ke:\n${appData.settings.bankDetails}\n`] : []),
-        `Terima kasih sudah memesan di ${appData.settings.bakeryName}!`
+        `Pembayaran via transfer:`,
+        appData.settings.bankDetails || '-',
+        ``,
+        `Terima kasih sudah memesan di ${appData.settings.bakeryName || 'Dapur PO'}!`
       ];
 
       const text = lines.join('\n');
       document.getElementById('receiptPreviewText').value = text;
 
-      let cleanPhone = (o.customerPhone || '').replace(/\D/g, '');
-      if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
-      const waUrl = cleanPhone
-        ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`
+      const cleanPhone = (order.customerPhone || '').replace(/[^0-9]/g, '');
+      const waPhone = cleanPhone.startsWith('0') ? '62' + cleanPhone.slice(1) : cleanPhone;
+      const waLink = document.getElementById('waDirectLink');
+      waLink.href = waPhone
+        ? `https://wa.me/${waPhone}?text=${encodeURIComponent(text)}`
         : `https://wa.me/?text=${encodeURIComponent(text)}`;
-      document.getElementById('waDirectLink').href = waUrl;
 
       document.getElementById('receiptModal').classList.remove('hidden');
       refreshIcons();
@@ -2178,81 +2203,79 @@
 
     function copyReceiptText() {
       const text = document.getElementById('receiptPreviewText').value;
-      copyTextToClipboard(text, 'Nota tagihan disalin! Siap paste ke WA.');
+      copyTextToClipboard(text, 'Nota tagihan disalin!');
     }
 
     function copyBlankOrderTemplate() {
-      const menuList = appData.menus.map(m => `- ${m.name} (${formatRupiah(m.price)})`).join('\n');
-      const template = [
-        `*FORM PRE-ORDER — ${appData.settings.bakeryName.toUpperCase()}*`,
-        ``,
+      const tpl = [
+        `*FORMAT ORDER PO - ${(appData.settings.bakeryName || 'Dapur PO').toUpperCase()}*`,
         `Nama Pemesan:`,
         `No. WhatsApp:`,
-        `Tanggal Kirim / Ambil:`,
-        `Metode (Ambil / GoSend / Kurir):`,
+        `Tanggal Kirim:`,
+        `Metode Kirim (Pick Up / GoSend / Kurir):`,
         `Alamat Lengkap:`,
-        ``,
-        `*Pesanan Kue:*`,
-        `1. ... (jumlah)`,
-        `2. ... (jumlah)`,
-        ``,
+        `Pesanan & Jumlah:`,
+        `1. `,
+        `2. `,
         `Catatan / Ucapan:`,
-        `--------------------------------`,
-        `*Daftar Menu Tersedia:*`,
-        menuList
+        ``,
+        `Terima kasih!`
       ].join('\n');
-
-      copyTextToClipboard(template, 'Template Form Order Kosong disalin!');
+      copyTextToClipboard(tpl, 'Format order kosong disalin untuk WA!');
     }
 
     // =========================================================================
-    // 7. CATALOG & BATCH QUOTA MANAGEMENT
+    // 8. CATALOG & QUOTA MANAGEMENT
     // =========================================================================
+    function getMenuBookedQty(menuName) {
+      return appData.orders
+        .filter(o => o.fulfillmentStatus !== 'Selesai')
+        .reduce((sum, o) => {
+          const matched = (o.items || []).filter(i => i.name === menuName);
+          return sum + matched.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+        }, 0);
+    }
+
     function renderMenus() {
       const container = document.getElementById('catalogListContainer');
-      if (appData.menus.length === 0) {
-        container.innerHTML = `<p class="col-span-full text-center py-8 text-xs text-espresso/60">Belum ada menu di katalog. Tambahkan menu pertama Anda.</p>`;
+      if (!container) return;
+
+      if (!appData.menus || appData.menus.length === 0) {
+        container.innerHTML = `<div class="col-span-full bg-white p-8 rounded-2xl border border-espresso/10 text-center text-xs text-espresso/60">Belum ada menu di katalog. Klik "+ Tambah Menu" untuk mulai mengisi daftar kue.</div>`;
         return;
       }
 
-      const soldMap = {};
-      appData.orders.forEach(o => {
-        (o.items || []).forEach(i => {
-          soldMap[i.name] = (soldMap[i.name] || 0) + (Number(i.qty) || 0);
-        });
-      });
-
       container.innerHTML = appData.menus.map(m => {
-        const orderedQty = soldMap[m.name] || 0;
+        const booked = getMenuBookedQty(m.name);
         const quota = Number(m.quota) || 0;
-        const pct = quota > 0 ? Math.min(100, Math.round((orderedQty / quota) * 100)) : 0;
+        const pct = quota > 0 ? Math.min(100, Math.round((booked / quota) * 100)) : 0;
 
         return `
-          <div class="bg-white p-4 md:p-5 rounded-2xl border border-espresso/10 shadow-2xs flex flex-col justify-between gap-4">
+          <div class="bg-white rounded-2xl border border-espresso/10 shadow-2xs p-4 flex flex-col justify-between gap-3">
             <div>
               <div class="flex items-center justify-between gap-2 mb-1.5">
-                <span class="px-2.5 py-0.5 rounded-full bg-creamDark text-espresso/75 text-[11px] font-semibold">${m.category}</span>
+                <span class="px-2.5 py-0.5 rounded-full bg-creamDark text-espresso/75 text-[11px] font-semibold">${m.category || 'Menu'}</span>
                 <div class="flex items-center gap-1">
                   <button onclick="openMenuModal('${m.id}')" class="p-1.5 rounded-lg hover:bg-creamDark text-espresso/70" title="Edit Menu">
                     <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                   </button>
-                  <button onclick="confirmDeleteMenu('${m.id}')" class="p-1.5 rounded-lg hover:bg-red-50 text-red-500" title="Hapus Menu">
+                  <button onclick="confirmDeleteMenu('${m.id}')" class="p-1.5 rounded-lg hover:bg-red-50 text-red-600" title="Hapus Menu">
                     <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                   </button>
                 </div>
               </div>
-              <h4 class="font-bold text-base text-espresso">${m.name}</h4>
+              <h4 class="font-bold text-sm text-espresso leading-snug">${m.name}</h4>
               <p class="font-serif text-lg font-bold text-terracotta mt-1 tabular-nums">${formatRupiah(m.price)}</p>
             </div>
 
-            <div class="space-y-1.5 pt-2 border-t border-espresso/10">
-              <div class="flex justify-between text-xs">
-                <span class="text-espresso/65">Terpesan di PO: <strong class="text-espresso">${orderedQty}</strong></span>
-                <span class="text-espresso/65">${quota > 0 ? `Kuota: ${quota}` : 'Tanpa batas kuota'}</span>
+            <div class="pt-2.5 border-t border-espresso/10 space-y-1.5">
+              <div class="flex justify-between text-[11px] font-semibold">
+                <span class="text-espresso/60">Terpesan aktif: <strong class="text-espresso">${booked}</strong></span>
+                <span class="text-espresso/60">${quota > 0 ? `Kuota: ${quota}` : 'Tanpa batas'}</span>
               </div>
               ${quota > 0 ? `
                 <div class="w-full h-2 rounded-full bg-creamDark overflow-hidden">
-                  <div class="h-full rounded-full ${pct >= 90 ? 'bg-red-500' : 'bg-sage'}" style="width: ${pct}%"></div>
+                  <div class="h-full rounded-full ${pct >= 100 ? 'bg-red-500' : 'bg-sage'}" style="width: ${pct}%"></div>
                 </div>
               ` : ''}
             </div>
@@ -2263,29 +2286,32 @@
     }
 
     function openMenuModal(menuId = null) {
+      const modal = document.getElementById('menuModal');
+      if (!modal) return;
       if (menuId) {
         const m = appData.menus.find(x => x.id === menuId);
         if (!m) return;
         document.getElementById('menuModalTitle').textContent = 'Edit Menu Kue';
-        document.getElementById('editMenuId').value = m.id;
-        document.getElementById('menuName').value = m.name;
-        document.getElementById('menuCategory').value = m.category;
-        document.getElementById('menuPrice').value = m.price;
-        document.getElementById('menuQuota').value = m.quota || 0;
+        setFieldVal('editMenuId', m.id);
+        setFieldVal('menuName', m.name);
+        setFieldVal('menuCategory', m.category || 'Kue Kering');
+        setFieldVal('menuPrice', m.price);
+        setFieldVal('menuQuota', m.quota || 0);
       } else {
         document.getElementById('menuModalTitle').textContent = 'Tambah Menu Kue';
-        document.getElementById('editMenuId').value = '';
-        document.getElementById('menuName').value = '';
-        document.getElementById('menuCategory').value = 'Kue Kering';
-        document.getElementById('menuPrice').value = '';
-        document.getElementById('menuQuota').value = 20;
+        setFieldVal('editMenuId', '');
+        setFieldVal('menuName', '');
+        setFieldVal('menuCategory', 'Kue Kering');
+        setFieldVal('menuPrice', '');
+        setFieldVal('menuQuota', 0);
       }
-      document.getElementById('menuModal').classList.remove('hidden');
+      modal.classList.remove('hidden');
       refreshIcons();
     }
 
     function closeMenuModal() {
-      document.getElementById('menuModal').classList.add('hidden');
+      const modal = document.getElementById('menuModal');
+      if (modal) modal.classList.add('hidden');
     }
 
     function handleSaveMenu(e) {
@@ -2302,59 +2328,58 @@
       if (editId) {
         const idx = appData.menus.findIndex(m => m.id === editId);
         if (idx !== -1) appData.menus[idx] = menuObj;
-        showToast('Harga & detail menu berhasil diperbarui!');
       } else {
         appData.menus.push(menuObj);
-        showToast('Menu baru ditambahkan ke katalog!');
       }
 
       saveData({ syncAction: 'upsertCatalogItem', syncPayload: menuObj });
       closeMenuModal();
       renderMenus();
-      renderDashboard();
+      showToast(editId ? 'Menu diperbarui!' : 'Menu baru ditambahkan!');
     }
 
     function confirmDeleteMenu(menuId) {
-      openConfirmDialog('Hapus Menu?', 'Menu akan dihapus dari katalog (pesanan lama tetap aman).', async () => {
-        appData.menus = appData.menus.filter(m => m.id !== menuId);
-        saveData({ skipAutoSync: true });
-        if (hasGasConfig()) {
-          try {
-            await gasPostRequest({ action: 'deleteRow', sheet: 'Catalog', id: menuId });
-            await pushAllToGoogleSheets(true);
-          } catch (err) {
-            recordSyncResult('error', `Gagal hapus menu di Sheets: ${err.message}`);
-          }
+      const m = appData.menus.find(x => x.id === menuId);
+      if (!m) return;
+      openConfirmDialog(
+        `Hapus Menu "${m.name}"?`,
+        'Menu akan dihapus dari katalog.',
+        () => {
+          appData.menus = appData.menus.filter(x => x.id !== menuId);
+          saveData({ syncAction: 'syncAll' });
+          renderMenus();
+          showToast('Menu dihapus.');
         }
-        renderMenus();
-        renderDashboard();
-        showToast('Menu dihapus.');
-      });
+      );
     }
 
     function copyCatalogBroadcast() {
+      if (!appData.menus || appData.menus.length === 0) {
+        showToast('Katalog menu masih kosong.');
+        return;
+      }
       const lines = [
-        `*OPEN PRE-ORDER — ${appData.settings.bakeryName.toUpperCase()}*`,
-        `Yuk amankan slot PO kloter kali ini sebelum kuota penuh:`,
-        ``
+        `*OPEN PO - ${(appData.settings.bakeryName || 'Dapur PO').toUpperCase()}*`,
+        `Daftar Menu & Harga:`,
+        `--------------------------------`,
+        ...appData.menus.map((m, idx) => `${idx + 1}. *${m.name}* — ${formatRupiah(m.price)}`),
+        `--------------------------------`,
+        `Format Order: Nama / Alamat / Menu & Jumlah / Tgl Kirim`,
+        `WA Admin: ${appData.settings.whatsapp || '-'}`
       ];
-      appData.menus.forEach((m, i) => {
-        lines.push(`${i + 1}. *${m.name}* — ${formatRupiah(m.price)}`);
-      });
-      lines.push(``);
-      lines.push(`Pemesanan langsung balas chat ini ya!`);
-      copyTextToClipboard(lines.join('\n'), 'Daftar harga katalog disalin untuk broadcast!');
+      copyTextToClipboard(lines.join('\n'), 'Daftar harga menu disalin untuk broadcast WA!');
     }
 
     // =========================================================================
-    // 8. PENGELUARAN (BAHAN BAKU & OPERASIONAL)
+    // 9. EXPENSES MANAGEMENT
     // =========================================================================
     function handleSaveExpense(e) {
       e.preventDefault();
+      const catEl = document.querySelector('input[name="expCategory"]:checked');
       const expObj = {
         id: 'exp-' + Date.now(),
-        date: document.getElementById('expDate').value,
-        category: document.querySelector('input[name="expCategory"]:checked')?.value || 'Bahan Baku',
+        date: document.getElementById('expDate').value || getTodayISO(),
+        category: catEl ? catEl.value : 'Bahan Baku',
         title: document.getElementById('expTitle').value.trim(),
         amount: Number(document.getElementById('expAmount').value) || 0
       };
@@ -2365,31 +2390,34 @@
       document.getElementById('expAmount').value = '';
       renderExpenses();
       renderDashboard();
-      showToast('Pengeluaran berhasil dicatat!');
+      showToast('Pengeluaran dicatat!');
     }
 
     function renderExpenses() {
-      const total = appData.expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
-      document.getElementById('expenseTotalBadge').textContent = formatRupiah(total);
-
       const container = document.getElementById('expensesListContainer');
-      if (appData.expenses.length === 0) {
-        container.innerHTML = `<p class="p-6 text-center text-xs text-espresso/55">Belum ada catatan pengeluaran bahan atau operasional.</p>`;
+      const totalBadge = document.getElementById('expenseTotalBadge');
+      if (!container) return;
+
+      const total = (appData.expenses || []).reduce((s, e) => s + (Number(e.amount) || 0), 0);
+      if (totalBadge) totalBadge.textContent = formatRupiah(total);
+
+      if (!appData.expenses || appData.expenses.length === 0) {
+        container.innerHTML = `<p class="p-6 text-xs text-espresso/55 text-center">Belum ada catatan belanja atau biaya operasional.</p>`;
         return;
       }
 
-      container.innerHTML = appData.expenses.map(e => `
-        <div class="p-4 flex items-center justify-between gap-3 hover:bg-cream/50">
+      container.innerHTML = appData.expenses.map(ex => `
+        <div class="p-4 flex items-center justify-between gap-3 hover:bg-cream/50 transition">
           <div>
             <div class="flex items-center gap-2">
-              <span class="px-2 py-0.5 rounded-md bg-creamDark text-espresso/80 text-[11px] font-semibold">${e.category}</span>
-              <span class="text-[11px] text-espresso/55">${formatDateIndo(e.date)}</span>
+              <span class="px-2 py-0.5 rounded-md bg-creamDark text-espresso/75 text-[11px] font-semibold">${ex.category}</span>
+              <span class="text-[11px] text-espresso/55">${formatDateIndo(ex.date)}</span>
             </div>
-            <p class="font-semibold text-sm text-espresso mt-1">${e.title}</p>
+            <p class="text-sm font-bold text-espresso mt-1">${ex.title}</p>
           </div>
           <div class="flex items-center gap-2.5">
-            <span class="font-bold text-sm text-terracotta tabular-nums">${formatRupiah(e.amount)}</span>
-            <button onclick="deleteExpense('${e.id}')" class="p-1.5 rounded-lg text-red-500 hover:bg-red-50">
+            <span class="text-sm font-bold text-terracotta tabular-nums">${formatRupiah(ex.amount)}</span>
+            <button onclick="confirmDeleteExpense('${ex.id}')" class="p-1.5 rounded-lg text-red-600 hover:bg-red-50" title="Hapus">
               <i data-lucide="trash-2" class="w-4 h-4"></i>
             </button>
           </div>
@@ -2398,155 +2426,148 @@
       refreshIcons();
     }
 
-    function deleteExpense(expId) {
-      openConfirmDialog('Hapus Catatan Pengeluaran?', 'Nominal pengeluaran ini akan dihapus dari laporan.', async () => {
-        appData.expenses = appData.expenses.filter(e => e.id !== expId);
-        saveData({ skipAutoSync: true });
-        if (hasGasConfig()) {
-          try {
-            await gasPostRequest({ action: 'deleteRow', sheet: 'Expenses', id: expId });
-            await pushAllToGoogleSheets(true);
-          } catch (err) {
-            recordSyncResult('error', `Gagal hapus biaya di Sheets: ${err.message}`);
-          }
-        }
+    function confirmDeleteExpense(expId) {
+      openConfirmDialog('Hapus Catatan Belanja?', 'Data pengeluaran ini akan dihapus.', () => {
+        appData.expenses = appData.expenses.filter(x => x.id !== expId);
+        saveData({ syncAction: 'syncAll' });
         renderExpenses();
         renderDashboard();
-        showToast('Pengeluaran dihapus.');
+        showToast('Catatan belanja dihapus.');
       });
     }
 
     // =========================================================================
-    // 9. SETTINGS & BACKUP JSON
+    // 10. SETTINGS, BACKUP & INITIALIZATION
     // =========================================================================
-    function renderSettings() {
-      document.getElementById('setBakeryName').value = appData.settings.bakeryName || '';
-      document.getElementById('setWhatsapp').value = appData.settings.whatsapp || '';
-      document.getElementById('setBankDetails').value = appData.settings.bankDetails || '';
+    function updateBrandTitles() {
+      const name = (appData.settings && appData.settings.bakeryName) || 'Dapur PO';
+      const el = document.getElementById('sidebarBrandName');
+      if (el) el.textContent = name;
+    }
 
-      const gasInput = document.getElementById('setGasUrl');
-      const tokInput = document.getElementById('setApiToken');
-      const autoChk = document.getElementById('setAutoSync');
-      if (gasInput) gasInput.value = (appData.sync && appData.sync.webAppUrl) || '';
-      if (tokInput) tokInput.value = (appData.sync && appData.sync.apiToken) || '';
-      if (autoChk) autoChk.checked = Boolean(appData.sync && appData.sync.autoSync);
+    function renderSettings() {
+      setFieldVal('setBakeryName', (appData.settings && appData.settings.bakeryName) || '');
+      setFieldVal('setWhatsapp', (appData.settings && appData.settings.whatsapp) || '');
+      setFieldVal('setBankDetails', (appData.settings && appData.settings.bankDetails) || '');
+
+      const sync = appData.sync || {};
+      setFieldVal('setGasUrl', sync.webAppUrl || '');
+      setFieldVal('setApiToken', sync.apiToken || '');
+      const autoEl = document.getElementById('setAutoSync');
+      if (autoEl) autoEl.checked = sync.autoSync !== false;
       updateSyncStatusUI();
     }
 
     function handleSaveSettings(e) {
       e.preventDefault();
-      appData.settings.bakeryName = document.getElementById('setBakeryName').value.trim() || 'Artisan Bakehouse';
-      appData.settings.whatsapp = document.getElementById('setWhatsapp').value.trim();
-      appData.settings.bankDetails = document.getElementById('setBankDetails').value.trim();
+      appData.settings = {
+        bakeryName: document.getElementById('setBakeryName').value.trim() || 'Dapur PO',
+        whatsapp: document.getElementById('setWhatsapp').value.trim(),
+        bankDetails: document.getElementById('setBankDetails').value.trim()
+      };
       saveData({ syncAction: 'syncAll' });
       updateBrandTitles();
-      showToast('Pengaturan bakery berhasil disimpan!');
-    }
-
-    function updateBrandTitles() {
-      document.getElementById('sidebarBrandName').textContent = appData.settings.bakeryName || 'Dapur PO';
+      showToast('Profil dapur disimpan!');
     }
 
     function exportBackupJSON() {
-      const dataStr = JSON.stringify(appData, null, 2);
-      const blob = new Blob([dataStr], { type: 'application/json' });
+      const blob = new Blob([JSON.stringify(appData, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = `backup-dapur-po-${getTodayISO()}.json`;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      showToast('File backup JSON berhasil diunduh!');
+      showToast('File backup diunduh!');
     }
 
-    function importBackupJSON(event) {
-      const file = event.target.files[0];
+    function importBackupJSON(e) {
+      const file = e.target.files && e.target.files[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = function(e) {
+      reader.onload = function(ev) {
         try {
-          const imported = JSON.parse(e.target.result);
-          if (imported && imported.orders && imported.menus) {
-            appData = Object.assign(getDefaultData(), imported);
-            saveData({ syncAction: 'syncAll' });
-            updateBrandTitles();
-            renderDashboard();
-            renderSettings();
-            showToast('Data backup berhasil dipulihkan!');
-          } else {
-            showToast('Format file backup tidak valid.');
+          const parsed = JSON.parse(ev.target.result);
+          if (!parsed || !Array.isArray(parsed.orders)) {
+            throw new Error('Format file backup tidak valid.');
           }
+          const currentSync = appData.sync;
+          appData = parsed;
+          if (!appData.sync) appData.sync = currentSync;
+          saveData({ syncAction: 'syncAll' });
+          updateBrandTitles();
+          renderDashboard();
+          renderOrders();
+          renderMenus();
+          renderExpenses();
+          renderSettings();
+          showToast('Data berhasil dipulihkan!');
         } catch (err) {
-          showToast('Gagal membaca file JSON.');
+          showToast('Gagal memulihkan file JSON.');
         }
       };
       reader.readAsText(file);
     }
 
     function resetDemoData() {
-      openConfirmDialog('Reset ke Data Contoh?', 'Semua pesanan dan menu saat ini akan diganti dengan data simulasi awal.', () => {
-        const preservedSync = appData.sync;
-        appData = getDefaultData();
-        if (preservedSync) appData.sync = preservedSync;
-        saveData({ skipAutoSync: true });
-        updateBrandTitles();
-        renderDashboard();
-        renderSettings();
-        showToast('Data dikembalikan ke contoh awal.');
-      });
+      openConfirmDialog(
+        'Reset ke Data Contoh?',
+        'Seluruh pesanan dan catatan lokal akan diganti dengan data contoh awal.',
+        () => {
+          const currentSync = appData.sync;
+          appData = getDefaultData();
+          appData.sync = currentSync;
+          saveData({ skipAutoSync: true });
+          updateBrandTitles();
+          renderDashboard();
+          renderOrders();
+          renderMenus();
+          renderExpenses();
+          renderSettings();
+          showToast('Data dikembalikan ke contoh awal.');
+        }
+      );
     }
 
-    // =========================================================================
-    // 10. INITIALIZE APP ON LOAD
-    // =========================================================================
-    (function setupPwaManifest() {
-      const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#2C1E16"/><circle cx="256" cy="256" r="160" fill="#C86D51"/><text x="256" y="295" font-size="180" text-anchor="middle" fill="#FAF6F0" font-family="Georgia, serif" font-weight="bold">PO</text></svg>`;
-      const iconUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(iconSvg);
-      const manifestObj = {
-        name: 'Dapur PO — Manajemen Pre-Order Kue',
-        short_name: 'Dapur PO',
-        start_url: location.href.split('#')[0],
-        display: 'standalone',
-        background_color: '#FAF6F0',
-        theme_color: '#2C1E16',
-        icons: [
-          { src: iconUrl, sizes: '192x192', type: 'image/svg+xml', purpose: 'any maskable' },
-          { src: iconUrl, sizes: '512x512', type: 'image/svg+xml', purpose: 'any maskable' }
-        ]
-      };
-      const manifestBlob = new Blob([JSON.stringify(manifestObj)], { type: 'application/manifest+json' });
-      const manifestEl = document.getElementById('pwa-manifest');
-      if (manifestEl) manifestEl.setAttribute('href', URL.createObjectURL(manifestBlob));
-    })();
+    function setupPwaManifest() {
+      try {
+        const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#2C1E16"/><circle cx="256" cy="256" r="150" fill="#C86D51"/><path d="M176 280c0-44 36-80 80-80s80 36 80 80H176z" fill="#FAF6F0"/></svg>`;
+        const iconUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgIcon);
+        const manifest = {
+          name: 'Dapur PO — Manajemen Pre-Order Kue',
+          short_name: 'Dapur PO',
+          start_url: '.',
+          display: 'standalone',
+          background_color: '#FAF6F0',
+          theme_color: '#2C1E16',
+          icons: [{ src: iconUrl, sizes: '512x512', type: 'image/svg+xml', purpose: 'any maskable' }]
+        };
+        const manifestBlob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
+        const linkEl = document.getElementById('pwa-manifest');
+        if (linkEl) linkEl.href = URL.createObjectURL(manifestBlob);
+      } catch (_) {}
+    }
 
-    window.addEventListener('DOMContentLoaded', () => {
-      const expDateEl = document.getElementById('expDate');
-      if (expDateEl) expDateEl.value = getTodayISO();
+    document.addEventListener('DOMContentLoaded', () => {
+      setupPwaManifest();
+      setFieldVal('expDate', getTodayISO());
       updateBrandTitles();
       renderDashboard();
-      updateSyncStatusUI();
+      renderOrders();
+      renderMenus();
+      renderExpenses();
+      renderSettings();
       refreshIcons();
 
-      // Bersihkan Service Worker lama yang mungkin menahan request ke Google Apps Script
-      if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.getRegistrations().then((regs) => {
-          regs.forEach((reg) => reg.unregister().catch(() => {}));
-        }).catch(() => {});
-      }
-
-      // Auto-pull otomatis saat aplikasi dibuka, kembali aktif di layar HP, dan berkala tiap 25 detik
-      setTimeout(() => runAutoPullIfEnabled(), 900);
+      setTimeout(() => runAutoPullIfEnabled(), 1200);
+      setInterval(() => runAutoPullIfEnabled(), 25000);
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') {
           runAutoPullIfEnabled();
         }
       });
-      window.addEventListener('focus', () => runAutoPullIfEnabled());
-      setInterval(() => {
-        if (document.visibilityState === 'visible') {
-          runAutoPullIfEnabled();
-        }
-      }, 25000);
     });
   </script>
 </body>
