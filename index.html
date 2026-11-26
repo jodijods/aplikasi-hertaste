@@ -827,7 +827,68 @@
           lastMutationTs: 0
         },
         menus: [
-// ... existing code ... -->
+          { id: 'menu-1', name: 'Nastar Wisman Klasik (500gr)', category: 'Kue Kering', price: 145000, quota: 40 },
+          { id: 'menu-2', name: 'Kastengel Edam Keju (500gr)', category: 'Kue Kering', price: 155000, quota: 35 },
+          { id: 'menu-3', name: 'Fudgy Brownies Sekat (20x20)', category: 'Cake & Brownies', price: 110000, quota: 25 },
+          { id: 'menu-4', name: 'Hampers Gold Box (3 Toples)', category: 'Hampers', price: 425000, quota: 15 }
+        ],
+        orders: [
+          {
+            id: 'ord-101',
+            orderCode: 'PO-2601',
+            customerName: 'Ibu Melati',
+            customerPhone: '081234567890',
+            deliveryDate: today,
+            deliveryMethod: 'GoSend / GrabExpress',
+            items: [
+              { name: 'Nastar Wisman Klasik (500gr)', qty: 2, price: 145000 },
+              { name: 'Kastengel Edam Keju (500gr)', qty: 1, price: 155000 }
+            ],
+            shippingFee: 20000,
+            paymentStatus: 'DP',
+            dpAmount: 250000,
+            fulfillmentStatus: 'Dipanggang',
+            notes: 'Ucapan: Selamat ulang tahun Mama!'
+          },
+          {
+            id: 'ord-102',
+            orderCode: 'PO-2602',
+            customerName: 'Kak Nadya',
+            customerPhone: '085611223344',
+            deliveryDate: tomorrow,
+            deliveryMethod: 'Pick Up',
+            items: [
+              { name: 'Fudgy Brownies Sekat (20x20)', qty: 3, price: 110000 }
+            ],
+            shippingFee: 0,
+            paymentStatus: 'Lunas',
+            dpAmount: 330000,
+            fulfillmentStatus: 'Antrean',
+            notes: 'Ambil jam 14.00 siang'
+          }
+        ],
+        expenses: [
+          { id: 'exp-1', date: today, category: 'Bahan Baku', title: 'Butter Wisman 2 Kaleng & Keju Edam', amount: 480000 },
+          { id: 'exp-2', date: today, category: 'Kemasan & Stiker', title: 'Toples Tabung 500gr (2 lusin) + Pita', amount: 115000 }
+        ]
+      };
+    }
+
+    function loadData() {
+      try {
+        const raw = localStorage.getItem(STORAGE_KEY);
+        if (!raw) {
+          const def = getDefaultData();
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(def));
+          return def;
+        }
+        const parsed = JSON.parse(raw);
+        const def = getDefaultData();
+        parsed.settings = Object.assign({}, def.settings, parsed.settings || {});
+        parsed.sync = Object.assign({
+          webAppUrl: DEFAULT_GAS_WEB_APP_URL,
+          apiToken: DEFAULT_GAS_API_TOKEN,
+          autoSync: true,
           lastSyncedAt: null,
           lastStatus: 'idle',
           lastMessage: '',
@@ -835,7 +896,21 @@
           lastMutationTs: 0
         }, parsed.sync || {});
         if (!parsed.sync.webAppUrl && DEFAULT_GAS_WEB_APP_URL) {
-// ... existing code ... -->
+          parsed.sync.webAppUrl = DEFAULT_GAS_WEB_APP_URL;
+        }
+        if (!parsed.sync.apiToken && DEFAULT_GAS_API_TOKEN) {
+          parsed.sync.apiToken = DEFAULT_GAS_API_TOKEN;
+        }
+        if (!Array.isArray(parsed.menus)) parsed.menus = def.menus;
+        if (!Array.isArray(parsed.orders)) parsed.orders = def.orders;
+        if (!Array.isArray(parsed.expenses)) parsed.expenses = def.expenses;
+        return parsed;
+      } catch (e) {
+        return getDefaultData();
+      }
+    }
+
+    let appData = loadData();
     let currentOrderStatusFilter = 'ALL';
     let autoSyncTimer = null;
     let isSyncInProgress = false;
@@ -865,7 +940,180 @@
         showToast('Gagal menyimpan ke memori perangkat!');
       }
     }
-// ... existing code ... -->
+
+    // =========================================================================
+    // 2. GOOGLE APPS SCRIPT SYNC ENGINE (/exec + API_TOKEN)
+    // =========================================================================
+    function sanitizeWebAppUrl(rawUrl) {
+      let val = String(rawUrl || '').trim();
+      if (!val) return '';
+      const qIdx = val.indexOf('?');
+      if (qIdx !== -1) val = val.slice(0, qIdx);
+      const hIdx = val.indexOf('#');
+      if (hIdx !== -1) val = val.slice(0, hIdx);
+      return val.trim();
+    }
+
+    function hasGasConfig() {
+      const s = appData.sync || {};
+      return Boolean(sanitizeWebAppUrl(s.webAppUrl) && String(s.apiToken || '').trim());
+    }
+
+    function formatSyncTime(isoStr) {
+      if (!isoStr) return '-';
+      const d = new Date(isoStr);
+      if (isNaN(d.getTime())) return isoStr;
+      return d.toLocaleString('id-ID', {
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+    }
+
+    function updateSyncStatusUI(customLogHtml) {
+      const s = appData.sync || {};
+      const configured = hasGasConfig();
+      const dot = document.getElementById('headerSyncDot');
+      const badge = document.getElementById('settingsSyncBadge');
+      const lastSyncEl = document.getElementById('settingsLastSyncText');
+      const modalSub = document.getElementById('modalSyncStatusSub');
+
+      if (dot) {
+        dot.className = 'w-2 h-2 rounded-full ' + (
+          !configured ? 'bg-amber-500' :
+          s.lastStatus === 'error' ? 'bg-red-500' :
+          s.lastStatus === 'syncing' ? 'bg-blue-500 animate-pulse' :
+          s.pendingSync ? 'bg-amber-500 animate-pulse' :
+          s.lastStatus === 'ok' ? 'bg-sage' : 'bg-amber-500'
+        );
+      }
+
+      if (badge) {
+        if (!configured) {
+          badge.className = 'px-2.5 py-1 rounded-full bg-creamDark text-espresso/75 text-[11px] font-semibold';
+          badge.textContent = 'Belum dikonfigurasi';
+        } else if (s.lastStatus === 'error') {
+          badge.className = 'px-2.5 py-1 rounded-full bg-red-100 text-red-700 text-[11px] font-bold';
+          badge.textContent = 'Error Sync';
+        } else if (s.lastStatus === 'syncing') {
+          badge.className = 'px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-[11px] font-bold';
+          badge.textContent = 'Menyinkronkan...';
+        } else if (s.pendingSync) {
+          badge.className = 'px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-[11px] font-bold';
+          badge.textContent = 'Menunggu Sync';
+        } else if (s.lastStatus === 'ok') {
+          badge.className = 'px-2.5 py-1 rounded-full bg-sageBg text-sage text-[11px] font-bold';
+          badge.textContent = 'Tersinkronisasi';
+        } else {
+          badge.className = 'px-2.5 py-1 rounded-full bg-creamDark text-espresso text-[11px] font-semibold';
+          badge.textContent = 'Siap Sync';
+        }
+      }
+
+      if (lastSyncEl) {
+        lastSyncEl.textContent = 'Terakhir sync: ' + formatSyncTime(s.lastSyncedAt);
+      }
+
+      if (modalSub) {
+        modalSub.textContent = !configured
+          ? 'Isi Web App URL & API_TOKEN untuk mulai'
+          : (s.lastSyncedAt ? 'Terakhir sync: ' + formatSyncTime(s.lastSyncedAt) : 'Konfigurasi tersimpan');
+      }
+
+      if (customLogHtml) {
+        const setLog = document.getElementById('settingsSyncLog');
+        const modLog = document.getElementById('modalSyncFeedback');
+        if (setLog) setLog.innerHTML = customLogHtml;
+        if (modLog) modLog.innerHTML = customLogHtml;
+      }
+    }
+
+    function gasJsonpRequest(urlObj) {
+      return new Promise((resolve, reject) => {
+        const cbName = '__gas_cb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+        const scriptEl = document.createElement('script');
+        let finished = false;
+
+        const cleanup = () => {
+          if (scriptEl.parentNode) scriptEl.parentNode.removeChild(scriptEl);
+          try { delete window[cbName]; } catch (_) { window[cbName] = undefined; }
+        };
+
+        const timer = setTimeout(() => {
+          if (finished) return;
+          finished = true;
+          cleanup();
+          reject(new Error('Timeout koneksi ke Google Apps Script (pastikan deployment berstatus Anyone).'));
+        }, 15000);
+
+        window[cbName] = (payload) => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          cleanup();
+          resolve(payload);
+        };
+
+        scriptEl.onerror = () => {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          cleanup();
+          reject(new Error('Gagal memuat skrip Google Apps Script. Cek kembali URL /exec dan akses deployment Anyone.'));
+        };
+
+        urlObj.searchParams.set('callback', cbName);
+        urlObj.searchParams.set('_ts', String(Date.now()));
+        scriptEl.src = urlObj.toString();
+        document.head.appendChild(scriptEl);
+      });
+    }
+
+    async function gasGetRequest(action, extraParams = {}) {
+      const urlStr = sanitizeWebAppUrl(appData.sync && appData.sync.webAppUrl);
+      const token = String((appData.sync && appData.sync.apiToken) || '').trim();
+      if (!urlStr || !token) {
+        throw new Error('Web App URL (/exec) dan API_TOKEN wajib diisi terlebih dahulu.');
+      }
+      if (!urlStr.includes('/exec')) {
+        throw new Error('URL tidak valid: pastikan berakhiran /exec (bukan /dev atau link editor).');
+      }
+
+      const urlObj = new URL(urlStr);
+      urlObj.searchParams.set('action', action);
+      urlObj.searchParams.set('token', token);
+      Object.entries(extraParams).forEach(([k, v]) => {
+        if (v !== undefined && v !== null) urlObj.searchParams.set(k, String(v));
+      });
+
+      try {
+        const data = await gasJsonpRequest(new URL(urlObj.toString()));
+        if (!data || !data.ok) {
+          throw new Error((data && data.error) || 'Respons API tidak valid.');
+        }
+        return data;
+      } catch (jsonpErr) {
+        const response = await fetch(urlObj.toString(), {
+          method: 'GET',
+          redirect: 'follow',
+          cache: 'no-store'
+        });
+        const text = await response.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (_) {
+          throw jsonpErr;
+        }
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        return data;
+      }
+    }
+
     async function gasPostRequest(payloadObj) {
       const urlStr = sanitizeWebAppUrl(appData.sync && appData.sync.webAppUrl);
       const token = String((appData.sync && appData.sync.apiToken) || '').trim();
@@ -999,7 +1247,1413 @@
 
     window.addEventListener('beforeunload', sendPendingBeaconOnUnload);
     window.addEventListener('pagehide', sendPendingBeaconOnUnload);
-// ... existing code ... -->
+
+    function mapOrderToSheetRow(o) {
+      const subtotal = getOrderSubtotal(o);
+      const totalAmount = getOrderTotal(o);
+      const paidAmount = getOrderPaid(o);
+      return {
+        id: o.id,
+        orderCode: o.orderCode,
+        customerName: o.customerName,
+        customerPhone: o.customerPhone || '',
+        channel: o.channel || 'WhatsApp',
+        deliveryMethod: o.deliveryMethod || 'Pick Up',
+        deliveryDate: o.deliveryDate || '',
+        items: o.items || [],
+        subtotal: subtotal,
+        shippingCost: Number(o.shippingFee) || 0,
+        totalAmount: totalAmount,
+        paidAmount: paidAmount,
+        paymentStatus: o.paymentStatus || 'Belum Bayar',
+        bankAccount: o.bankAccount || '',
+        notes: o.notes || '',
+        status: o.fulfillmentStatus || 'Antrean',
+        updatedAt: o.updatedAt || new Date().toISOString()
+      };
+    }
+
+    function mapSheetRowToOrder(row) {
+      let items = [];
+      if (Array.isArray(row.items)) {
+        items = row.items;
+      } else if (typeof row.itemsJson === 'string' && row.itemsJson.trim()) {
+        try { items = JSON.parse(row.itemsJson); } catch (_) { items = []; }
+      }
+      const shippingFee = Number(row.shippingCost !== undefined ? row.shippingCost : row.shippingFee) || 0;
+      const paidAmount = Number(row.paidAmount !== undefined ? row.paidAmount : row.dpAmount) || 0;
+      return {
+        id: String(row.id || ('ord-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6))),
+        orderCode: String(row.orderCode || 'PO-' + Math.floor(1000 + Math.random() * 9000)),
+        customerName: String(row.customerName || 'Pelanggan'),
+        customerPhone: String(row.customerPhone || ''),
+        deliveryDate: String(row.deliveryDate || getTodayISO()).slice(0, 10),
+        deliveryMethod: String(row.deliveryMethod || 'Pick Up'),
+        items: items.map(it => ({
+          name: String(it.name || 'Menu Kue'),
+          qty: Number(it.qty) || 1,
+          price: Number(it.price) || 0
+        })),
+        shippingFee: shippingFee,
+        paymentStatus: String(row.paymentStatus || 'Belum Bayar'),
+        dpAmount: paidAmount,
+        fulfillmentStatus: String(row.status || row.fulfillmentStatus || 'Antrean'),
+        notes: String(row.notes || ''),
+        updatedAt: row.updatedAt || ''
+      };
+    }
+
+    function mapMenuToSheetRow(m) {
+      return {
+        id: m.id,
+        name: m.name,
+        category: m.category || 'Kue Kering',
+        price: Number(m.price) || 0,
+        quota: Number(m.quota) || 0,
+        active: true,
+        updatedAt: m.updatedAt || new Date().toISOString()
+      };
+    }
+
+    function mapSheetRowToMenu(row) {
+      return {
+        id: String(row.id || ('menu-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6))),
+        name: String(row.name || 'Menu Baru'),
+        category: String(row.category || 'Kue Kering'),
+        price: Number(row.price) || 0,
+        quota: Number(row.quota) || 0
+      };
+    }
+
+    function mapExpenseToSheetRow(e) {
+      return {
+        id: e.id,
+        date: e.date || getTodayISO(),
+        category: e.category || 'Bahan Baku',
+        description: e.title || e.description || '',
+        amount: Number(e.amount) || 0,
+        updatedAt: e.updatedAt || new Date().toISOString()
+      };
+    }
+
+    function mapSheetRowToExpense(row) {
+      return {
+        id: String(row.id || ('exp-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6))),
+        date: String(row.date || getTodayISO()).slice(0, 10),
+        category: String(row.category || 'Bahan Baku'),
+        title: String(row.description || row.title || 'Pengeluaran'),
+        amount: Number(row.amount) || 0
+      };
+    }
+
+    function triggerAutoSync(action, customPayload) {
+      clearTimeout(autoSyncTimer);
+      autoSyncTimer = setTimeout(async () => {
+        if (!hasGasConfig() || !appData.sync.autoSync) return;
+        try {
+          isSyncInProgress = true;
+          appData.sync.lastStatus = 'syncing';
+          updateSyncStatusUI();
+
+          const payload = {
+            action: 'syncAll',
+            data: {
+              orders: appData.orders.map(mapOrderToSheetRow),
+              catalog: appData.menus.map(mapMenuToSheetRow),
+              expenses: appData.expenses.map(mapExpenseToSheetRow)
+            },
+            snapshot: {
+              settings: appData.settings,
+              menus: appData.menus,
+              orders: appData.orders,
+              expenses: appData.expenses
+            }
+          };
+
+          const res = await gasPostRequest(payload);
+          appData.sync.lastStatus = 'ok';
+          appData.sync.pendingSync = false;
+          appData.sync.lastSyncedAt = res.syncedAt || new Date().toISOString();
+          saveData({ skipAutoSync: true });
+        } catch (err) {
+          appData.sync.lastStatus = 'error';
+          appData.sync.lastMessage = err.message;
+          saveData({ skipAutoSync: true });
+          showToast('Gagal sync otomatis: ' + err.message);
+        } finally {
+          isSyncInProgress = false;
+        }
+      }, 60);
+    }
+
+    window.testGasConnection = async function testGasConnection(urlInputId, tokenInputId) {
+      const urlVal = sanitizeWebAppUrl(document.getElementById(urlInputId)?.value);
+      const tokenVal = (document.getElementById(tokenInputId)?.value || '').trim();
+      if (!urlVal || !tokenVal) {
+        showToast('Isi Web App URL dan API_TOKEN terlebih dahulu.');
+        return;
+      }
+      if (!urlVal.includes('/exec')) {
+        updateSyncStatusUI('<span class="text-red-700 font-semibold">URL tidak valid:</span> pastikan menyalin URL Web App berakhiran <b>/exec</b>.');
+        showToast('URL harus berakhiran /exec!');
+        return;
+      }
+      appData.sync.webAppUrl = urlVal;
+      appData.sync.apiToken = tokenVal;
+      appData.sync.lastStatus = 'syncing';
+      saveData({ skipAutoSync: true });
+      updateSyncStatusUI('Menguji koneksi ke Google Apps Script (<code class="font-mono">action=ping</code>)...');
+
+      try {
+        const pingRes = await gasGetRequest('ping');
+        const allRes = await gasGetRequest('all');
+        const counts = allRes.data || {};
+        const oLen = Array.isArray(counts.orders) ? counts.orders.length : 0;
+        const cLen = Array.isArray(counts.catalog) ? counts.catalog.length : 0;
+        const eLen = Array.isArray(counts.expenses) ? counts.expenses.length : 0;
+
+        appData.sync.lastStatus = 'ok';
+        appData.sync.lastSyncedAt = allRes.syncedAt || pingRes.timestamp || new Date().toISOString();
+        saveData({ skipAutoSync: true });
+
+        updateSyncStatusUI(
+          `<span class="text-sage font-bold">Koneksi berhasil!</span> Server aktif (${pingRes.message || 'Dapur PO API ready'}). ` +
+          `Data di Sheets: <b>${oLen} PO</b>, <b>${cLen} Katalog</b>, <b>${eLen} Pengeluaran</b>.`
+        );
+        showToast('Koneksi ke Google Sheets berhasil!');
+      } catch (err) {
+        appData.sync.lastStatus = 'error';
+        appData.sync.lastMessage = err.message;
+        saveData({ skipAutoSync: true });
+        updateSyncStatusUI(`<span class="text-red-700 font-bold">Gagal terhubung:</span> ${escapeHtml(err.message)}`);
+        showToast('Tes koneksi gagal!');
+      }
+    };
+
+    window.pullFromGoogleSheets = async function pullFromGoogleSheets(silent = false) {
+      if (!hasGasConfig()) {
+        if (!silent) showToast('Konfigurasi Web App URL & API_TOKEN dulu.');
+        return;
+      }
+      if (isSyncInProgress) return;
+      if (silent && appData.sync && appData.sync.pendingSync) {
+        triggerAutoSync('syncAll', null);
+        return;
+      }
+      isSyncInProgress = true;
+      appData.sync.lastStatus = 'syncing';
+      updateSyncStatusUI(silent ? '' : 'Menarik data terbaru dari Google Sheets...');
+
+      try {
+        const res = await gasGetRequest('all');
+        const payload = res.data || {};
+        const snap = payload.snapshot && typeof payload.snapshot === 'object' ? payload.snapshot : null;
+
+        const sheetOrders = Array.isArray(payload.orders) ? payload.orders.map(mapSheetRowToOrder) : [];
+        const sheetCatalog = Array.isArray(payload.catalog) ? payload.catalog.map(mapSheetRowToMenu) : [];
+        const sheetExpenses = Array.isArray(payload.expenses) ? payload.expenses.map(mapSheetRowToExpense) : [];
+
+        const hasAnySheetData = sheetOrders.length > 0 || sheetCatalog.length > 0 || sheetExpenses.length > 0 ||
+          (snap && ((Array.isArray(snap.orders) && snap.orders.length > 0) || (Array.isArray(snap.menus) && snap.menus.length > 0)));
+
+        if (silent && !hasAnySheetData) {
+          isSyncInProgress = false;
+          appData.sync.lastStatus = 'ok';
+          updateSyncStatusUI();
+          return;
+        }
+
+        if (snap && snap.settings) {
+          appData.settings = Object.assign({}, appData.settings, snap.settings);
+        }
+        if (sheetOrders.length > 0) {
+          appData.orders = sheetOrders;
+        } else if (snap && Array.isArray(snap.orders) && snap.orders.length > 0) {
+          appData.orders = snap.orders;
+        }
+        if (sheetCatalog.length > 0) {
+          appData.menus = sheetCatalog;
+        } else if (snap && Array.isArray(snap.menus) && snap.menus.length > 0) {
+          appData.menus = snap.menus;
+        }
+        if (sheetExpenses.length > 0) {
+          appData.expenses = sheetExpenses;
+        } else if (snap && Array.isArray(snap.expenses) && snap.expenses.length > 0) {
+          appData.expenses = snap.expenses;
+        }
+
+        appData.sync.lastStatus = 'ok';
+        appData.sync.pendingSync = false;
+        appData.sync.lastSyncedAt = res.syncedAt || new Date().toISOString();
+        saveData({ skipAutoSync: true });
+
+        renderAllViews();
+        if (!silent) {
+          updateSyncStatusUI(
+            `<span class="text-sage font-bold">Berhasil tarik data!</span> ` +
+            `Dimuat <b>${appData.orders.length} PO</b>, <b>${appData.menus.length} menu</b>, dan <b>${appData.expenses.length} biaya</b>.`
+          );
+          showToast('Data terbaru ditarik dari Google Sheets!');
+        }
+      } catch (err) {
+        appData.sync.lastStatus = 'error';
+        appData.sync.lastMessage = err.message;
+        saveData({ skipAutoSync: true });
+        if (!silent) {
+          updateSyncStatusUI(`<span class="text-red-700 font-bold">Gagal tarik data:</span> ${escapeHtml(err.message)}`);
+          showToast('Gagal tarik data: ' + err.message);
+        }
+      } finally {
+        isSyncInProgress = false;
+      }
+    };
+
+    window.pushAllToGoogleSheets = async function pushAllToGoogleSheets() {
+      if (!hasGasConfig()) {
+        showToast('Konfigurasi Web App URL & API_TOKEN dulu.');
+        return;
+      }
+      if (isSyncInProgress) return;
+      isSyncInProgress = true;
+      appData.sync.lastStatus = 'syncing';
+      updateSyncStatusUI('Mengirim seluruh data PO, Katalog, dan Biaya ke Google Sheets...');
+
+      try {
+        const res = await gasPostRequest({
+          action: 'syncAll',
+          data: {
+            orders: appData.orders.map(mapOrderToSheetRow),
+            catalog: appData.menus.map(mapMenuToSheetRow),
+            expenses: appData.expenses.map(mapExpenseToSheetRow)
+          },
+          snapshot: {
+            settings: appData.settings,
+            menus: appData.menus,
+            orders: appData.orders,
+            expenses: appData.expenses
+          }
+        });
+
+        appData.sync.lastStatus = 'ok';
+        appData.sync.pendingSync = false;
+        appData.sync.lastSyncedAt = res.syncedAt || new Date().toISOString();
+        saveData({ skipAutoSync: true });
+
+        updateSyncStatusUI(
+          `<span class="text-sage font-bold">Berhasil kirim ke Google Sheets!</span> ` +
+          `(${appData.orders.length} PO, ${appData.menus.length} menu, ${appData.expenses.length} pengeluaran tersimpan).`
+        );
+        showToast('Semua data terkirim ke Google Sheets!');
+      } catch (err) {
+        appData.sync.lastStatus = 'error';
+        appData.sync.lastMessage = err.message;
+        saveData({ skipAutoSync: true });
+        updateSyncStatusUI(`<span class="text-red-700 font-bold">Gagal kirim ke Sheets:</span> ${escapeHtml(err.message)}`);
+        showToast('Gagal kirim ke Google Sheets!');
+      } finally {
+        isSyncInProgress = false;
+      }
+    };
+
+    function runAutoPullIfEnabled() {
+      if (!hasGasConfig()) return;
+      if (!appData.sync || appData.sync.autoSync === false) return;
+      if (appData.sync.pendingSync) {
+        triggerAutoSync('syncAll', null);
+        return;
+      }
+      if (Date.now() - lastLocalMutationAt < 12000) return;
+      const openModal = document.querySelector('#orderModal:not(.hidden), #menuModal:not(.hidden), #syncModal:not(.hidden)');
+      if (openModal) return;
+      pullFromGoogleSheets(true);
+    }
+
+    window.saveSyncFieldsFromModal = function saveSyncFieldsFromModal() {
+      const urlEl = document.getElementById('modalGasUrl');
+      const tokEl = document.getElementById('modalApiToken');
+      const autoEl = document.getElementById('modalAutoSync');
+      if (!urlEl || !tokEl || !autoEl) return;
+
+      const urlVal = sanitizeWebAppUrl(urlEl.value);
+      urlEl.value = urlVal;
+      const tokVal = tokEl.value.trim();
+      const autoVal = autoEl.checked;
+
+      if (!appData.sync) appData.sync = {};
+      appData.sync.webAppUrl = urlVal;
+      appData.sync.apiToken = tokVal;
+      appData.sync.autoSync = autoVal;
+      saveData({ skipAutoSync: true });
+
+      const setUrl = document.getElementById('setGasUrl');
+      const setTok = document.getElementById('setApiToken');
+      const setAuto = document.getElementById('setAutoSync');
+      if (setUrl) setUrl.value = urlVal;
+      if (setTok) setTok.value = tokVal;
+      if (setAuto) setAuto.checked = autoVal;
+      updateSyncStatusUI();
+    };
+
+    window.handleSaveSyncConfig = function handleSaveSyncConfig(e) {
+      if (e) e.preventDefault();
+      const setUrl = document.getElementById('setGasUrl');
+      const setTok = document.getElementById('setApiToken');
+      const setAuto = document.getElementById('setAutoSync');
+      if (!appData.sync) appData.sync = {};
+      const cleanUrl = sanitizeWebAppUrl(setUrl?.value);
+      if (setUrl) setUrl.value = cleanUrl;
+      appData.sync.webAppUrl = cleanUrl;
+      appData.sync.apiToken = (setTok?.value || '').trim();
+      appData.sync.autoSync = Boolean(setAuto?.checked);
+      saveData({ skipAutoSync: true });
+      updateSyncStatusUI('Konfigurasi URL & API_TOKEN tersimpan di perangkat ini.');
+      showToast('Konfigurasi Sync Google Sheets disimpan!');
+    };
+
+    window.toggleTokenVisibility = function toggleTokenVisibility(inputId, iconId) {
+      const inp = document.getElementById(inputId);
+      const ico = document.getElementById(iconId);
+      if (!inp) return;
+      const isHidden = inp.type === 'password';
+      inp.type = isHidden ? 'text' : 'password';
+      if (ico) {
+        ico.setAttribute('data-lucide', isHidden ? 'eye-off' : 'eye');
+        refreshIcons();
+      }
+    };
+
+    // =========================================================================
+    // 3. FORMATTING & CALCULATION HELPERS
+    // =========================================================================
+    function formatRupiah(num) {
+      const n = Number(num) || 0;
+      return 'Rp ' + n.toLocaleString('id-ID');
+    }
+
+    function formatDateIndo(isoDate) {
+      if (!isoDate) return '-';
+      const parts = String(isoDate).split('-');
+      if (parts.length !== 3) return isoDate;
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+      const mIdx = parseInt(parts[1], 10) - 1;
+      return `${parts[2]} ${months[mIdx] || parts[1]} ${parts[0]}`;
+    }
+
+    function getOrderSubtotal(order) {
+      return (order.items || []).reduce((sum, item) => sum + ((Number(item.price) || 0) * (Number(item.qty) || 0)), 0);
+    }
+
+    function getOrderTotal(order) {
+      return getOrderSubtotal(order) + (Number(order.shippingFee) || 0);
+    }
+
+    function getOrderPaid(order) {
+      const total = getOrderTotal(order);
+      if (order.paymentStatus === 'Lunas') return total;
+      if (order.paymentStatus === 'DP') return Math.min(Number(order.dpAmount) || 0, total);
+      return 0;
+    }
+
+    function getOrderRemaining(order) {
+      return Math.max(0, getOrderTotal(order) - getOrderPaid(order));
+    }
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function showToast(msg) {
+      const el = document.getElementById('toast');
+      if (!el) return;
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      clearTimeout(window.__toastTimer);
+      window.__toastTimer = setTimeout(() => {
+        el.classList.add('hidden');
+      }, 2800);
+    }
+
+    function copyTextToClipboard(text, successMsg) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast(successMsg || 'Teks berhasil disalin!');
+      } catch (e) {
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(text).then(() => showToast(successMsg || 'Teks berhasil disalin!'));
+        }
+      }
+    }
+
+    // =========================================================================
+    // 4. NAVIGATION & TAB SWITCHING
+    // =========================================================================
+    const TAB_META = {
+      dashboard: {
+        title: 'Ringkasan & Produksi',
+        subtitle: 'Kelola jadwal panggang, piutang DP, dan laba bersih PO'
+      },
+      orders: {
+        title: 'Daftar Pesanan PO',
+        subtitle: 'Pantau status produksi, pelunasan, dan kirim nota WA'
+      },
+      catalog: {
+        title: 'Katalog Kue & Kuota',
+        subtitle: 'Atur harga jual dan batas kuota produksi per kloter'
+      },
+      expenses: {
+        title: 'Belanja Bahan & Biaya',
+        subtitle: 'Catat pengeluaran bahan baku, kemasan, dan operasional'
+      },
+      settings: {
+        title: 'Pengaturan & Sync Sheets',
+        subtitle: 'Profil dapur, rekening transfer, backup, dan sinkronisasi'
+      }
+    };
+
+    window.switchTab = function switchTab(tabKey) {
+      document.querySelectorAll('.tab-section').forEach(sec => sec.classList.add('hidden'));
+      const activeSec = document.getElementById('tab-' + tabKey);
+      if (activeSec) activeSec.classList.remove('hidden');
+
+      document.querySelectorAll('.nav-btn').forEach(btn => {
+        const isMatch = btn.getAttribute('data-nav') === tabKey;
+        btn.className = isMatch
+          ? 'nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all bg-terracotta text-white shadow-sm'
+          : 'nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-cream/80 hover:bg-cream/10 transition-all';
+      });
+
+      document.querySelectorAll('.mob-nav-btn').forEach(btn => {
+        const isMatch = btn.getAttribute('data-nav') === tabKey;
+        btn.className = isMatch
+          ? 'mob-nav-btn flex flex-col items-center gap-1 py-1 px-2 text-terracotta font-bold text-[11px]'
+          : 'mob-nav-btn flex flex-col items-center gap-1 py-1 px-2 text-espresso/60 font-medium text-[11px]';
+      });
+
+      const meta = TAB_META[tabKey] || TAB_META.dashboard;
+      document.getElementById('headerTitle').textContent = meta.title;
+      document.getElementById('headerSubtitle').textContent = meta.subtitle;
+
+      renderAllViews();
+    };
+
+    function renderAllViews() {
+      const brandEl = document.getElementById('sidebarBrandName');
+      if (brandEl) brandEl.textContent = appData.settings.bakeryName || 'Dapur PO';
+      renderDashboard();
+      renderOrders();
+      renderMenus();
+      renderExpenses();
+      renderSettings();
+      updateSyncStatusUI();
+      refreshIcons();
+    }
+
+    // =========================================================================
+    // 5. DASHBOARD & BAKING LIST RENDERING
+    // =========================================================================
+    window.setBakingDateAll = function setBakingDateAll() {
+      const dateInput = document.getElementById('bakingDateFilter');
+      if (dateInput) dateInput.value = '';
+      renderDashboard();
+    };
+
+    function renderDashboard() {
+      const activeOrders = appData.orders.filter(o => o.fulfillmentStatus !== 'Dibatalkan');
+      const totalRevenue = activeOrders.reduce((sum, o) => sum + getOrderTotal(o), 0);
+      const totalUnpaid = activeOrders.reduce((sum, o) => sum + getOrderRemaining(o), 0);
+      const unpaidOrders = activeOrders.filter(o => getOrderRemaining(o) > 0);
+      const totalExpense = appData.expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+      const netProfit = totalRevenue - totalExpense;
+
+      document.getElementById('kpiRevenue').textContent = formatRupiah(totalRevenue);
+      document.getElementById('kpiOrderCount').textContent = `${activeOrders.length} pesanan aktif`;
+      document.getElementById('kpiUnpaid').textContent = formatRupiah(totalUnpaid);
+      document.getElementById('kpiUnpaidCount').textContent = `${unpaidOrders.length} order belum lunas`;
+      document.getElementById('kpiExpense').textContent = formatRupiah(totalExpense);
+      document.getElementById('kpiExpenseCount').textContent = `${appData.expenses.length} catatan belanja`;
+      document.getElementById('kpiNetProfit').textContent = formatRupiah(netProfit);
+
+      const dateFilter = document.getElementById('bakingDateFilter')?.value || '';
+      const filteredForBaking = activeOrders.filter(o => {
+        if (o.fulfillmentStatus === 'Selesai') return false;
+        if (dateFilter && o.deliveryDate !== dateFilter) return false;
+        return true;
+      });
+
+      const itemTotals = {};
+      filteredForBaking.forEach(o => {
+        (o.items || []).forEach(it => {
+          const key = (it.name || 'Item').trim();
+          if (!itemTotals[key]) itemTotals[key] = { name: key, qty: 0, orderCount: 0 };
+          itemTotals[key].qty += Number(it.qty) || 0;
+          itemTotals[key].orderCount += 1;
+        });
+      });
+
+      const bakingList = Object.values(itemTotals).sort((a, b) => b.qty - a.qty);
+      const bakingContainer = document.getElementById('bakingListContainer');
+      if (bakingList.length === 0) {
+        bakingContainer.innerHTML = `
+          <div class="text-center py-8 text-espresso/55">
+            <p class="text-sm font-semibold">Tidak ada antrean kue yang perlu dipanggang${dateFilter ? ' pada ' + formatDateIndo(dateFilter) : ''}.</p>
+            <p class="text-xs mt-1">Ubah filter tanggal atau klik "Semua Tanggal" untuk melihat rekap lengkap.</p>
+          </div>
+        `;
+      } else {
+        bakingContainer.innerHTML = `
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            ${bakingList.map(item => `
+              <div class="p-3.5 rounded-2xl bg-cream border border-espresso/10 flex items-center justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="text-sm font-bold text-espresso truncate">${escapeHtml(item.name)}</p>
+                  <p class="text-[11px] text-espresso/60">Dari ${item.orderCount} pesanan</p>
+                </div>
+                <div class="px-3 py-1.5 rounded-xl bg-terracotta text-white font-serif text-base font-bold tabular-nums shrink-0">
+                  ${item.qty} pcs
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        `;
+      }
+
+      const upcomingContainer = document.getElementById('upcomingOrdersContainer');
+      const urgentOrders = [...activeOrders]
+        .filter(o => o.fulfillmentStatus !== 'Selesai' || getOrderRemaining(o) > 0)
+        .sort((a, b) => String(a.deliveryDate).localeCompare(String(b.deliveryDate)))
+        .slice(0, 6);
+
+      if (urgentOrders.length === 0) {
+        upcomingContainer.innerHTML = `<div class="p-6 text-center text-xs text-espresso/55">Semua pesanan sudah selesai & lunas!</div>`;
+      } else {
+        upcomingContainer.innerHTML = urgentOrders.map(o => {
+          const rem = getOrderRemaining(o);
+          return `
+            <div class="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 hover:bg-cream/50 transition">
+              <div>
+                <div class="flex items-center gap-2 flex-wrap">
+                  <span class="text-xs font-bold text-terracotta">${escapeHtml(o.orderCode)}</span>
+                  <span class="text-sm font-bold text-espresso">${escapeHtml(o.customerName)}</span>
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-bold ${rem > 0 ? 'bg-amber-100 text-amber-800' : 'bg-sageBg text-sage'}">
+                    ${rem > 0 ? 'Sisa ' + formatRupiah(rem) : 'Lunas'}
+                  </span>
+                </div>
+                <p class="text-xs text-espresso/65 mt-0.5">
+                  Kirim: <b>${formatDateIndo(o.deliveryDate)}</b> (${escapeHtml(o.deliveryMethod)}) • ${(o.items || []).map(i => `${i.qty}x ${i.name}`).join(', ')}
+                </p>
+              </div>
+              <div class="flex items-center gap-2 self-end sm:self-center">
+                <span class="px-2.5 py-1 rounded-xl bg-creamDark text-espresso text-xs font-semibold">${escapeHtml(o.fulfillmentStatus)}</span>
+                <button onclick="openReceiptModal('${o.id}')" class="px-3 py-1.5 rounded-xl bg-sageBg text-sage hover:bg-sage hover:text-white text-xs font-bold transition">Nota</button>
+              </div>
+            </div>
+          `;
+        }).join('');
+      }
+    }
+
+    window.copyBakingListText = function copyBakingListText() {
+      const dateFilter = document.getElementById('bakingDateFilter')?.value || '';
+      const activeOrders = appData.orders.filter(o => o.fulfillmentStatus !== 'Selesai' && o.fulfillmentStatus !== 'Dibatalkan' && (!dateFilter || o.deliveryDate === dateFilter));
+      const totals = {};
+      activeOrders.forEach(o => {
+        (o.items || []).forEach(it => {
+          totals[it.name] = (totals[it.name] || 0) + (Number(it.qty) || 0);
+        });
+      });
+      const entries = Object.entries(totals);
+      if (entries.length === 0) {
+        showToast('Tidak ada daftar produksi untuk disalin.');
+        return;
+      }
+      const header = `*REKAP PRODUKSI / BAKING LIST*\n*${appData.settings.bakeryName}*\nTanggal: ${dateFilter ? formatDateIndo(dateFilter) : 'Semua Jadwal Aktif'}\n--------------------------------\n`;
+      const body = entries.map(([name, qty], idx) => `${idx + 1}. ${name} : *${qty} pcs*`).join('\n');
+      copyTextToClipboard(header + body, 'Rekap produksi dapur disalin!');
+    };
+
+    // =========================================================================
+    // 6. ORDERS LIST, STATUS UPDATES & MODAL CRUD
+    // =========================================================================
+    window.setOrderStatusFilter = function setOrderStatusFilter(status) {
+      currentOrderStatusFilter = status;
+      document.querySelectorAll('.status-chip').forEach(btn => {
+        const active = btn.getAttribute('data-status-filter') === status;
+        btn.className = active
+          ? 'status-chip px-3.5 py-1.5 rounded-full text-xs font-bold bg-espresso text-cream whitespace-nowrap'
+          : 'status-chip px-3.5 py-1.5 rounded-full text-xs font-semibold bg-creamDark text-espresso/75 hover:bg-espresso/10 whitespace-nowrap';
+      });
+      renderOrders();
+    };
+
+    window.clearOrderFilters = function clearOrderFilters() {
+      document.getElementById('orderSearchInput').value = '';
+      document.getElementById('orderDateFilter').value = '';
+      setOrderStatusFilter('ALL');
+    };
+
+    function renderOrders() {
+      const query = (document.getElementById('orderSearchInput')?.value || '').toLowerCase().trim();
+      const dateFilter = document.getElementById('orderDateFilter')?.value || '';
+
+      const filtered = appData.orders.filter(o => {
+        if (dateFilter && o.deliveryDate !== dateFilter) return false;
+        if (currentOrderStatusFilter === 'UNPAID' && getOrderRemaining(o) <= 0) return false;
+        if (currentOrderStatusFilter !== 'ALL' && currentOrderStatusFilter !== 'UNPAID' && o.fulfillmentStatus !== currentOrderStatusFilter) return false;
+        if (query) {
+          const hay = `${o.orderCode} ${o.customerName} ${o.customerPhone} ${(o.items || []).map(i => i.name).join(' ')}`.toLowerCase();
+          if (!hay.includes(query)) return false;
+        }
+        return true;
+      }).sort((a, b) => String(a.deliveryDate).localeCompare(String(b.deliveryDate)));
+
+      const container = document.getElementById('ordersListContainer');
+      if (filtered.length === 0) {
+        container.innerHTML = `
+          <div class="col-span-full bg-white p-10 rounded-2xl border border-espresso/10 text-center space-y-2">
+            <p class="font-serif text-base font-bold text-espresso">Belum ada pesanan yang cocok</p>
+            <p class="text-xs text-espresso/60">Klik tombol "Catat PO" di kanan atas untuk menambah pesanan baru.</p>
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = filtered.map(o => {
+        const total = getOrderTotal(o);
+        const remaining = getOrderRemaining(o);
+        const payBadge = remaining === 0
+          ? `<span class="px-2.5 py-0.5 rounded-full bg-sageBg text-sage text-[11px] font-bold">Lunas</span>`
+          : o.paymentStatus === 'DP'
+            ? `<span class="px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-800 text-[11px] font-bold">DP • Sisa ${formatRupiah(remaining)}</span>`
+            : `<span class="px-2.5 py-0.5 rounded-full bg-red-100 text-red-700 text-[11px] font-bold">Belum Bayar</span>`;
+
+        return `
+          <div class="bg-white rounded-2xl border border-espresso/10 shadow-2xs p-4 md:p-5 flex flex-col justify-between gap-4">
+            <div class="space-y-3">
+              <div class="flex items-start justify-between gap-2">
+                <div>
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs font-bold text-terracotta">${escapeHtml(o.orderCode)}</span>
+                    ${payBadge}
+                  </div>
+                  <h4 class="font-serif text-base font-bold text-espresso mt-0.5">${escapeHtml(o.customerName)}</h4>
+                  <p class="text-xs text-espresso/60">${formatDateIndo(o.deliveryDate)} • ${escapeHtml(o.deliveryMethod)}</p>
+                </div>
+                <select onchange="updateOrderFulfillment('${o.id}', this.value)" aria-label="Status Produksi" class="px-2.5 py-1.5 rounded-xl bg-cream border border-espresso/15 text-xs font-bold text-espresso focus:outline-none focus:border-terracotta">
+                  <option value="Antrean" ${o.fulfillmentStatus === 'Antrean' ? 'selected' : ''}>Antrean</option>
+                  <option value="Dipanggang" ${o.fulfillmentStatus === 'Dipanggang' ? 'selected' : ''}>Dipanggang</option>
+                  <option value="Siap Kirim" ${o.fulfillmentStatus === 'Siap Kirim' ? 'selected' : ''}>Siap Kirim</option>
+                  <option value="Selesai" ${o.fulfillmentStatus === 'Selesai' ? 'selected' : ''}>Selesai</option>
+                </select>
+              </div>
+
+              <div class="bg-cream/70 rounded-xl p-3 space-y-1">
+                ${(o.items || []).map(it => `
+                  <div class="flex justify-between text-xs">
+                    <span class="text-espresso font-medium">${it.qty}x ${escapeHtml(it.name)}</span>
+                    <span class="text-espresso/75 tabular-nums">${formatRupiah((Number(it.qty) || 0) * (Number(it.price) || 0))}</span>
+                  </div>
+                `).join('')}
+                ${Number(o.shippingFee) > 0 ? `
+                  <div class="flex justify-between text-xs pt-1 border-t border-espresso/10 text-espresso/70">
+                    <span>Ongkos Kirim</span>
+                    <span class="tabular-nums">${formatRupiah(o.shippingFee)}</span>
+                  </div>
+                ` : ''}
+                <div class="flex justify-between text-xs font-bold text-espresso pt-1 border-t border-espresso/10">
+                  <span>Total Tagihan</span>
+                  <span class="tabular-nums">${formatRupiah(total)}</span>
+                </div>
+              </div>
+
+              ${o.notes ? `<p class="text-xs text-espresso/70 italic bg-amberBg/40 px-3 py-2 rounded-xl">Catatan: ${escapeHtml(o.notes)}</p>` : ''}
+            </div>
+
+            <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-espresso/10">
+              <div class="flex items-center gap-1.5">
+                <button onclick="openReceiptModal('${o.id}')" class="px-3 py-1.5 rounded-xl bg-sageBg hover:bg-sage text-sage hover:text-white text-xs font-bold flex items-center gap-1 transition">
+                  <i data-lucide="receipt" class="w-3.5 h-3.5"></i>
+                  <span>Nota WA</span>
+                </button>
+                ${remaining > 0 ? `
+                  <button onclick="markOrderPaid('${o.id}')" class="px-3 py-1.5 rounded-xl bg-amber-100 hover:bg-amber-200 text-amber-900 text-xs font-bold transition">
+                    Tandai Lunas
+                  </button>
+                ` : ''}
+              </div>
+              <div class="flex items-center gap-1.5">
+                <button onclick="openOrderModal('${o.id}')" class="p-2 rounded-xl bg-creamDark hover:bg-espresso/10 text-espresso" title="Edit Pesanan">
+                  <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                </button>
+                <button onclick="deleteOrder('${o.id}')" class="p-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600" title="Hapus Pesanan">
+                  <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+      refreshIcons();
+    }
+
+    window.updateOrderFulfillment = function updateOrderFulfillment(orderId, newStatus) {
+      const ord = appData.orders.find(o => o.id === orderId);
+      if (!ord) return;
+      ord.fulfillmentStatus = newStatus;
+      ord.updatedAt = new Date().toISOString();
+      saveData();
+      renderDashboard();
+      renderOrders();
+      showToast(`Status diubah ke ${newStatus}`);
+    };
+
+    window.markOrderPaid = function markOrderPaid(orderId) {
+      const ord = appData.orders.find(o => o.id === orderId);
+      if (!ord) return;
+      ord.paymentStatus = 'Lunas';
+      ord.dpAmount = getOrderTotal(ord);
+      ord.updatedAt = new Date().toISOString();
+      saveData();
+      renderAllViews();
+      showToast('Pesanan ditandai Lunas!');
+    };
+
+    window.deleteOrder = function deleteOrder(orderId) {
+      const ord = appData.orders.find(o => o.id === orderId);
+      if (!ord) return;
+      openConfirmDialog(
+        'Hapus Pesanan PO?',
+        `Pesanan ${ord.orderCode} atas nama ${ord.customerName} akan dihapus permanen.`,
+        () => {
+          appData.orders = appData.orders.filter(o => o.id !== orderId);
+          saveData();
+          renderAllViews();
+          showToast('Pesanan berhasil dihapus.');
+        }
+      );
+    };
+
+    window.openOrderModal = function openOrderModal(orderId = null) {
+      const modal = document.getElementById('orderModal');
+      const itemsContainer = document.getElementById('orderItemsContainer');
+      itemsContainer.innerHTML = '';
+
+      if (orderId) {
+        const ord = appData.orders.find(o => o.id === orderId);
+        if (!ord) return;
+        document.getElementById('orderModalTitle').textContent = `Edit Pesanan (${ord.orderCode})`;
+        document.getElementById('editOrderId').value = ord.id;
+        document.getElementById('ordCustomerName').value = ord.customerName || '';
+        document.getElementById('ordCustomerPhone').value = ord.customerPhone || '';
+        document.getElementById('ordDeliveryDate').value = ord.deliveryDate || getTodayISO();
+        document.getElementById('ordDeliveryMethod').value = ord.deliveryMethod || 'Pick Up';
+        document.getElementById('ordShippingFee').value = ord.shippingFee || 0;
+        document.getElementById('ordPaymentStatus').value = ord.paymentStatus || 'Belum Bayar';
+        document.getElementById('ordDpAmount').value = ord.dpAmount || 0;
+        document.getElementById('ordNotes').value = ord.notes || '';
+        (ord.items || []).forEach(it => addOrderItemRow(it.name, it.qty, it.price));
+      } else {
+        document.getElementById('orderModalTitle').textContent = 'Catat Pesanan PO Baru';
+        document.getElementById('editOrderId').value = '';
+        document.getElementById('ordCustomerName').value = '';
+        document.getElementById('ordCustomerPhone').value = '';
+        document.getElementById('ordDeliveryDate').value = getTomorrowISO();
+        document.getElementById('ordDeliveryMethod').value = 'Pick Up';
+        document.getElementById('ordShippingFee').value = 0;
+        document.getElementById('ordPaymentStatus').value = 'Belum Bayar';
+        document.getElementById('ordDpAmount').value = 0;
+        document.getElementById('ordNotes').value = '';
+        const firstMenu = appData.menus[0];
+        addOrderItemRow(firstMenu ? firstMenu.name : '', 1, firstMenu ? firstMenu.price : 0);
+      }
+
+      toggleDpInput();
+      recalculateOrderModalTotal();
+      modal.classList.remove('hidden');
+      refreshIcons();
+    };
+
+    window.closeOrderModal = function closeOrderModal() {
+      document.getElementById('orderModal').classList.add('hidden');
+    };
+
+    window.addOrderItemRow = function addOrderItemRow(name = '', qty = 1, price = 0) {
+      const container = document.getElementById('orderItemsContainer');
+      const row = document.createElement('div');
+      row.className = 'order-item-row grid grid-cols-12 gap-2 items-center bg-cream/60 p-2.5 rounded-xl border border-espresso/10';
+
+      const menuOptions = appData.menus.map(m =>
+        `<option value="${escapeHtml(m.name)}" data-price="${m.price}" ${m.name === name ? 'selected' : ''}>${escapeHtml(m.name)} (${formatRupiah(m.price)})</option>`
+      ).join('');
+
+      row.innerHTML = `
+        <div class="col-span-12 sm:col-span-6">
+          <select onchange="onSelectCatalogMenu(this)" class="item-menu-select w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-semibold text-espresso">
+            <option value="__custom__">-- Ketik Manual / Pilih Menu --</option>
+            ${menuOptions}
+          </select>
+          <input type="text" value="${escapeHtml(name)}" placeholder="Nama kue..." class="item-name-input mt-1 w-full px-2.5 py-1.5 rounded-lg bg-white border border-espresso/15 text-xs ${name && appData.menus.some(m => m.name === name) ? 'hidden' : ''}" />
+        </div>
+        <div class="col-span-4 sm:col-span-2">
+          <input type="number" min="1" value="${qty}" oninput="recalculateOrderModalTotal()" placeholder="Qty" class="item-qty-input w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-bold text-center tabular-nums" />
+        </div>
+        <div class="col-span-6 sm:col-span-3">
+          <input type="number" min="0" step="500" value="${price}" oninput="recalculateOrderModalTotal()" placeholder="Harga" class="item-price-input w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-semibold tabular-nums" />
+        </div>
+        <div class="col-span-2 sm:col-span-1 flex justify-end">
+          <button type="button" onclick="this.closest('.order-item-row').remove(); recalculateOrderModalTotal();" class="p-1.5 rounded-lg text-red-600 hover:bg-red-50">
+            <i data-lucide="trash-2" class="w-4 h-4"></i>
+          </button>
+        </div>
+      `;
+      container.appendChild(row);
+      refreshIcons();
+    };
+
+    window.onSelectCatalogMenu = function onSelectCatalogMenu(selectEl) {
+      const row = selectEl.closest('.order-item-row');
+      const nameInput = row.querySelector('.item-name-input');
+      const priceInput = row.querySelector('.item-price-input');
+      const selectedOpt = selectEl.options[selectEl.selectedIndex];
+
+      if (selectEl.value === '__custom__') {
+        nameInput.classList.remove('hidden');
+        nameInput.value = '';
+        nameInput.focus();
+      } else {
+        nameInput.classList.add('hidden');
+        nameInput.value = selectEl.value;
+        const p = Number(selectedOpt.getAttribute('data-price')) || 0;
+        priceInput.value = p;
+      }
+      recalculateOrderModalTotal();
+    };
+
+    window.toggleDpInput = function toggleDpInput() {
+      const status = document.getElementById('ordPaymentStatus').value;
+      const wrapper = document.getElementById('dpAmountWrapper');
+      if (status === 'DP') {
+        wrapper.classList.remove('hidden');
+      } else {
+        wrapper.classList.add('hidden');
+      }
+    };
+
+    window.recalculateOrderModalTotal = function recalculateOrderModalTotal() {
+      let subtotal = 0;
+      document.querySelectorAll('.order-item-row').forEach(row => {
+        const qty = Number(row.querySelector('.item-qty-input')?.value) || 0;
+        const price = Number(row.querySelector('.item-price-input')?.value) || 0;
+        subtotal += qty * price;
+      });
+      const shipping = Number(document.getElementById('ordShippingFee')?.value) || 0;
+      const total = subtotal + shipping;
+      const payStatus = document.getElementById('ordPaymentStatus')?.value || 'Belum Bayar';
+      const dpVal = Number(document.getElementById('ordDpAmount')?.value) || 0;
+      const paid = payStatus === 'Lunas' ? total : (payStatus === 'DP' ? Math.min(dpVal, total) : 0);
+      const remaining = Math.max(0, total - paid);
+
+      document.getElementById('modalOrderTotalText').textContent = formatRupiah(total);
+      document.getElementById('modalOrderRemainingText').textContent = formatRupiah(remaining);
+    };
+
+    window.handleSaveOrder = function handleSaveOrder(e) {
+      e.preventDefault();
+      const editId = document.getElementById('editOrderId').value;
+      const customerName = document.getElementById('ordCustomerName').value.trim();
+      const customerPhone = document.getElementById('ordCustomerPhone').value.trim();
+      const deliveryDate = document.getElementById('ordDeliveryDate').value;
+      const deliveryMethod = document.getElementById('ordDeliveryMethod').value;
+      const shippingFee = Number(document.getElementById('ordShippingFee').value) || 0;
+      const paymentStatus = document.getElementById('ordPaymentStatus').value;
+      const dpAmount = Number(document.getElementById('ordDpAmount').value) || 0;
+      const notes = document.getElementById('ordNotes').value.trim();
+
+      const items = [];
+      document.querySelectorAll('.order-item-row').forEach(row => {
+        const selVal = row.querySelector('.item-menu-select')?.value;
+        const manualVal = row.querySelector('.item-name-input')?.value.trim();
+        const name = (selVal && selVal !== '__custom__') ? selVal : manualVal;
+        const qty = Number(row.querySelector('.item-qty-input')?.value) || 0;
+        const price = Number(row.querySelector('.item-price-input')?.value) || 0;
+        if (name && qty > 0) {
+          items.push({ name, qty, price });
+        }
+      });
+
+      if (items.length === 0) {
+        showToast('Tambahkan minimal 1 item kue yang dipesan.');
+        return;
+      }
+
+      if (editId) {
+        const idx = appData.orders.findIndex(o => o.id === editId);
+        if (idx !== -1) {
+          appData.orders[idx] = Object.assign({}, appData.orders[idx], {
+            customerName,
+            customerPhone,
+            deliveryDate,
+            deliveryMethod,
+            items,
+            shippingFee,
+            paymentStatus,
+            dpAmount,
+            notes,
+            updatedAt: new Date().toISOString()
+          });
+        }
+      } else {
+        const nextNum = 2601 + appData.orders.length;
+        appData.orders.unshift({
+          id: 'ord-' + Date.now(),
+          orderCode: 'PO-' + nextNum,
+          customerName,
+          customerPhone,
+          deliveryDate,
+          deliveryMethod,
+          items,
+          shippingFee,
+          paymentStatus,
+          dpAmount,
+          fulfillmentStatus: 'Antrean',
+          notes,
+          updatedAt: new Date().toISOString()
+        });
+      }
+
+      saveData();
+      closeOrderModal();
+      renderAllViews();
+      showToast(editId ? 'Pesanan PO diperbarui!' : 'Pesanan PO baru disimpan!');
+    };
+
+    // =========================================================================
+    // 7. RECEIPT & WHATSAPP TEMPLATES
+    // =========================================================================
+    window.openReceiptModal = function openReceiptModal(orderId) {
+      const ord = appData.orders.find(o => o.id === orderId);
+      if (!ord) return;
+
+      const total = getOrderTotal(ord);
+      const paid = getOrderPaid(ord);
+      const remaining = getOrderRemaining(ord);
+      const bakeryName = appData.settings.bakeryName || 'Dapur PO';
+      const bankInfo = appData.settings.bankDetails || '-';
+
+      const itemLines = (ord.items || []).map((it, idx) =>
+        `${idx + 1}. ${it.name} (${it.qty}x @ ${formatRupiah(it.price)}) = ${formatRupiah((Number(it.qty) || 0) * (Number(it.price) || 0))}`
+      ).join('\n');
+
+      const receiptText = [
+        `*NOTA PESANAN PO — ${bakeryName.toUpperCase()}*`,
+        `Kode PO: *${ord.orderCode}*`,
+        `Pemesan: *${ord.customerName}*`,
+        `Jadwal Kirim/Ambil: *${formatDateIndo(ord.deliveryDate)}* (${ord.deliveryMethod})`,
+        `--------------------------------`,
+        `*Rincian Pesanan:*`,
+        itemLines,
+        Number(ord.shippingFee) > 0 ? `Ongkos Kirim: ${formatRupiah(ord.shippingFee)}` : null,
+        `--------------------------------`,
+        `*Total Tagihan: ${formatRupiah(total)}*`,
+        `Status Bayar: *${ord.paymentStatus}*${ord.paymentStatus === 'DP' ? ` (Masuk ${formatRupiah(paid)})` : ''}`,
+        remaining > 0 ? `*Sisa Pelunasan: ${formatRupiah(remaining)}*` : `*LUNAS — Terima kasih!*`,
+        ord.notes ? `\nCatatan: _${ord.notes}_` : null,
+        remaining > 0 ? `\n*Pembayaran Transfer:*\n${bankInfo}` : null,
+        `\nTerima kasih sudah memesan di ${bakeryName}!`
+      ].filter(Boolean).join('\n');
+
+      document.getElementById('receiptPreviewText').value = receiptText;
+
+      let phone = String(ord.customerPhone || '').replace(/\D/g, '');
+      if (phone.startsWith('0')) phone = '62' + phone.slice(1);
+      const waUrl = phone
+        ? `https://wa.me/${phone}?text=${encodeURIComponent(receiptText)}`
+        : `https://wa.me/?text=${encodeURIComponent(receiptText)}`;
+      document.getElementById('waDirectLink').href = waUrl;
+
+      document.getElementById('receiptModal').classList.remove('hidden');
+      refreshIcons();
+    };
+
+    window.closeReceiptModal = function closeReceiptModal() {
+      document.getElementById('receiptModal').classList.add('hidden');
+    };
+
+    window.copyReceiptText = function copyReceiptText() {
+      const text = document.getElementById('receiptPreviewText')?.value || '';
+      copyTextToClipboard(text, 'Teks nota berhasil disalin!');
+    };
+
+    window.copyBlankOrderTemplate = function copyBlankOrderTemplate() {
+      const bakeryName = appData.settings.bakeryName || 'Dapur PO';
+      const tpl = [
+        `*FORMAT ORDER PO — ${bakeryName.toUpperCase()}*`,
+        `Nama Pemesan:`,
+        `No. WhatsApp:`,
+        `Tanggal Kirim / Ambil:`,
+        `Metode (Pick Up / Kurir):`,
+        `Alamat Lengkap (jika kirim):`,
+        ``,
+        `*Pesanan Kue:*`,
+        `- `,
+        `- `,
+        ``,
+        `Catatan / Ucapan:`
+      ].join('\n');
+      copyTextToClipboard(tpl, 'Template form order kosong disalin!');
+    };
+
+    // =========================================================================
+    // 8. CATALOG / MENU MANAGEMENT
+    // =========================================================================
+    function renderMenus() {
+      const container = document.getElementById('catalogListContainer');
+      if (!container) return;
+
+      const bookedByMenu = {};
+      appData.orders
+        .filter(o => o.fulfillmentStatus !== 'Selesai' && o.fulfillmentStatus !== 'Dibatalkan')
+        .forEach(o => {
+          (o.items || []).forEach(it => {
+            bookedByMenu[it.name] = (bookedByMenu[it.name] || 0) + (Number(it.qty) || 0);
+          });
+        });
+
+      if (appData.menus.length === 0) {
+        container.innerHTML = `<div class="col-span-full bg-white p-8 rounded-2xl border border-espresso/10 text-center text-xs text-espresso/60">Belum ada menu di katalog. Klik "Tambah Menu" untuk mulai mengisi.</div>`;
+        return;
+      }
+
+      container.innerHTML = appData.menus.map(m => {
+        const booked = bookedByMenu[m.name] || 0;
+        const quota = Number(m.quota) || 0;
+        const pct = quota > 0 ? Math.min(100, Math.round((booked / quota) * 100)) : 0;
+
+        return `
+          <div class="bg-white p-5 rounded-2xl border border-espresso/10 shadow-2xs flex flex-col justify-between gap-4">
+            <div>
+              <div class="flex items-center justify-between gap-2 mb-1.5">
+                <span class="px-2.5 py-0.5 rounded-full bg-creamDark text-espresso/80 text-[11px] font-semibold">${escapeHtml(m.category)}</span>
+                <div class="flex items-center gap-1">
+                  <button onclick="openMenuModal('${m.id}')" class="p-1.5 rounded-lg hover:bg-creamDark text-espresso/70" title="Edit Menu">
+                    <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
+                  </button>
+                  <button onclick="deleteMenu('${m.id}')" class="p-1.5 rounded-lg hover:bg-red-50 text-red-600" title="Hapus Menu">
+                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                  </button>
+                </div>
+              </div>
+              <h4 class="font-serif text-base font-bold text-espresso">${escapeHtml(m.name)}</h4>
+              <p class="font-serif text-lg font-bold text-terracotta mt-1 tabular-nums">${formatRupiah(m.price)}</p>
+            </div>
+
+            <div class="pt-3 border-t border-espresso/10 space-y-1.5">
+              <div class="flex justify-between text-[11px] font-semibold text-espresso/70">
+                <span>Terpesan aktif: ${booked} pcs</span>
+                <span>${quota > 0 ? 'Kuota: ' + quota + ' pcs' : 'Tanpa batas kuota'}</span>
+              </div>
+              ${quota > 0 ? `
+                <div class="w-full h-2 rounded-full bg-creamDark overflow-hidden">
+                  <div class="h-full rounded-full ${pct >= 90 ? 'bg-red-500' : 'bg-sage'}" style="width: ${pct}%"></div>
+                </div>
+              ` : ''}
+            </div>
+          </div>
+        `;
+      }).join('');
+      refreshIcons();
+    }
+
+    window.openMenuModal = function openMenuModal(menuId = null) {
+      const modal = document.getElementById('menuModal');
+      if (menuId) {
+        const m = appData.menus.find(x => x.id === menuId);
+        if (!m) return;
+        document.getElementById('menuModalTitle').textContent = 'Edit Menu Kue';
+        document.getElementById('editMenuId').value = m.id;
+        document.getElementById('menuName').value = m.name;
+        document.getElementById('menuCategory').value = m.category || 'Kue Kering';
+        document.getElementById('menuPrice').value = m.price;
+        document.getElementById('menuQuota').value = m.quota || 0;
+      } else {
+        document.getElementById('menuModalTitle').textContent = 'Tambah Menu Kue';
+        document.getElementById('editMenuId').value = '';
+        document.getElementById('menuName').value = '';
+        document.getElementById('menuCategory').value = 'Kue Kering';
+        document.getElementById('menuPrice').value = '';
+        document.getElementById('menuQuota').value = 0;
+      }
+      modal.classList.remove('hidden');
+      refreshIcons();
+    };
+
+    window.closeMenuModal = function closeMenuModal() {
+      document.getElementById('menuModal').classList.add('hidden');
+    };
+
+    window.handleSaveMenu = function handleSaveMenu(e) {
+      e.preventDefault();
+      const editId = document.getElementById('editMenuId').value;
+      const name = document.getElementById('menuName').value.trim();
+      const category = document.getElementById('menuCategory').value;
+      const price = Number(document.getElementById('menuPrice').value) || 0;
+      const quota = Number(document.getElementById('menuQuota').value) || 0;
+
+      if (!name || price <= 0) {
+        showToast('Nama kue dan harga wajib diisi.');
+        return;
+      }
+
+      if (editId) {
+        const idx = appData.menus.findIndex(m => m.id === editId);
+        if (idx !== -1) {
+          appData.menus[idx] = { id: editId, name, category, price, quota, updatedAt: new Date().toISOString() };
+        }
+      } else {
+        appData.menus.push({
+          id: 'menu-' + Date.now(),
+          name,
+          category,
+          price,
+          quota,
+          updatedAt: new Date().toISOString()
+        });
+      }
+
+      saveData();
+      closeMenuModal();
+      renderAllViews();
+      showToast(editId ? 'Menu diperbarui!' : 'Menu baru ditambahkan!');
+    };
+
+    window.deleteMenu = function deleteMenu(menuId) {
+      const m = appData.menus.find(x => x.id === menuId);
+      if (!m) return;
+      openConfirmDialog('Hapus Menu Katalog?', `Menu "${m.name}" akan dihapus dari katalog.`, () => {
+        appData.menus = appData.menus.filter(x => x.id !== menuId);
+        saveData();
+        renderAllViews();
+        showToast('Menu dihapus.');
+      });
+    };
+
+    window.copyCatalogBroadcast = function copyCatalogBroadcast() {
+      if (appData.menus.length === 0) {
+        showToast('Katalog menu masih kosong.');
+        return;
+      }
+      const bakeryName = appData.settings.bakeryName || 'Dapur PO';
+      const list = appData.menus.map((m, idx) => `${idx + 1}. *${m.name}* — ${formatRupiah(m.price)}`).join('\n');
+      const text = `*OPEN PRE-ORDER — ${bakeryName.toUpperCase()}*\n\nDaftar Menu:\n${list}\n\nHubungi WA ${appData.settings.whatsapp || ''} untuk pemesanan!`;
+      copyTextToClipboard(text, 'Daftar menu siap broadcast disalin!');
+    };
+
+    // =========================================================================
+    // 9. EXPENSES MANAGEMENT
+    // =========================================================================
+    function renderExpenses() {
+      const expDateInput = document.getElementById('expDate');
+      if (expDateInput && !expDateInput.value) expDateInput.value = getTodayISO();
+
+      const totalExp = appData.expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+      const badge = document.getElementById('expenseTotalBadge');
+      if (badge) badge.textContent = formatRupiah(totalExp);
+
+      const container = document.getElementById('expensesListContainer');
+      if (!container) return;
+
+      if (appData.expenses.length === 0) {
+        container.innerHTML = `<div class="p-8 text-center text-xs text-espresso/55">Belum ada catatan belanja atau pengeluaran.</div>`;
+        return;
+      }
+
+      const sorted = [...appData.expenses].sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      container.innerHTML = sorted.map(exp => `
+        <div class="p-4 flex items-center justify-between gap-3 hover:bg-cream/50 transition">
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="px-2 py-0.5 rounded-full bg-creamDark text-espresso text-[10px] font-bold">${escapeHtml(exp.category)}</span>
+              <span class="text-[11px] text-espresso/55">${formatDateIndo(exp.date)}</span>
+            </div>
+            <p class="text-sm font-semibold text-espresso mt-1">${escapeHtml(exp.title)}</p>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="font-serif text-sm font-bold text-terracotta tabular-nums">${formatRupiah(exp.amount)}</span>
+            <button onclick="deleteExpense('${exp.id}')" class="p-1.5 rounded-lg text-red-600 hover:bg-red-50" title="Hapus">
+              <i data-lucide="trash-2" class="w-4 h-4"></i>
+            </button>
+          </div>
+        </div>
+      `).join('');
+      refreshIcons();
+    }
+
+    window.handleSaveExpense = function handleSaveExpense(e) {
+      e.preventDefault();
+      const date = document.getElementById('expDate').value || getTodayISO();
+      const category = document.querySelector('input[name="expCategory"]:checked')?.value || 'Bahan Baku';
+      const title = document.getElementById('expTitle').value.trim();
+      const amount = Number(document.getElementById('expAmount').value) || 0;
+
+      if (!title || amount <= 0) {
+        showToast('Isi keterangan belanja dan nominal dengan benar.');
+        return;
+      }
+
+      appData.expenses.unshift({
+        id: 'exp-' + Date.now(),
+        date,
+        category,
+        title,
+        amount,
+        updatedAt: new Date().toISOString()
+      });
+
+      document.getElementById('expTitle').value = '';
+      document.getElementById('expAmount').value = '';
+      saveData();
+      renderAllViews();
+      showToast('Pengeluaran berhasil dicatat!');
+    };
+
+    window.deleteExpense = function deleteExpense(expId) {
+      openConfirmDialog('Hapus Catatan Biaya?', 'Data pengeluaran ini akan dihapus dari perhitungan laba.', () => {
+        appData.expenses = appData.expenses.filter(x => x.id !== expId);
+        saveData();
+        renderAllViews();
+        showToast('Catatan pengeluaran dihapus.');
+      });
+    };
+
+    // =========================================================================
+    // 10. SETTINGS, BACKUP & CONFIRM DIALOG
+    // =========================================================================
+    function renderSettings() {
+      const setBakery = document.getElementById('setBakeryName');
+      const setWa = document.getElementById('setWhatsapp');
+      const setBank = document.getElementById('setBankDetails');
+      const setGasUrl = document.getElementById('setGasUrl');
+      const setApiToken = document.getElementById('setApiToken');
+      const setAutoSync = document.getElementById('setAutoSync');
+
+      if (setBakery) setBakery.value = appData.settings.bakeryName || '';
+      if (setWa) setWa.value = appData.settings.whatsapp || '';
+      if (setBank) setBank.value = appData.settings.bankDetails || '';
+      if (setGasUrl) setGasUrl.value = (appData.sync && appData.sync.webAppUrl) || '';
+      if (setApiToken) setApiToken.value = (appData.sync && appData.sync.apiToken) || '';
+      if (setAutoSync) setAutoSync.checked = Boolean(appData.sync ? appData.sync.autoSync : true);
+    }
+
+    window.handleSaveSettings = function handleSaveSettings(e) {
+      e.preventDefault();
+      appData.settings.bakeryName = document.getElementById('setBakeryName').value.trim() || 'Dapur PO';
+      appData.settings.whatsapp = document.getElementById('setWhatsapp').value.trim();
+      appData.settings.bankDetails = document.getElementById('setBankDetails').value.trim();
+      saveData();
+      renderAllViews();
+      showToast('Profil dapur & rekening disimpan!');
+    };
+
+    window.exportBackupJSON = function exportBackupJSON() {
+      const blob = new Blob([JSON.stringify(appData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `backup-dapur-po-${getTodayISO()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('File backup berhasil diunduh!');
+    };
+
+    window.importBackupJSON = function importBackupJSON(e) {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        try {
+          const parsed = JSON.parse(ev.target.result);
+          if (!parsed || !Array.isArray(parsed.orders) || !Array.isArray(parsed.menus)) {
+            throw new Error('Format file backup tidak sesuai.');
+          }
+          appData = Object.assign(getDefaultData(), parsed);
+          saveData();
+          renderAllViews();
+          showToast('Data berhasil dipulihkan dari backup!');
+        } catch (err) {
+          showToast('Gagal restore file: ' + err.message);
+        }
+      };
+      reader.readAsText(file);
+    };
+
+    window.resetDemoData = function resetDemoData() {
+      openConfirmDialog('Reset ke Data Contoh?', 'Seluruh data PO, katalog, dan pengeluaran lokal akan diganti dengan data contoh bawaan.', () => {
+        const keepSync = appData.sync;
+        appData = getDefaultData();
+        appData.sync = keepSync;
+        saveData();
+        renderAllViews();
+        showToast('Data direset ke contoh bawaan.');
+      });
+    };
+
+    function openConfirmDialog(title, message, onConfirm) {
+      document.getElementById('confirmModalTitle').textContent = title;
+      document.getElementById('confirmModalMessage').textContent = message;
+      const actionBtn = document.getElementById('confirmModalActionBtn');
+      actionBtn.onclick = () => {
+        closeConfirmDialog();
+        if (typeof onConfirm === 'function') onConfirm();
+      };
+      document.getElementById('confirmModal').classList.remove('hidden');
+    }
+
+    window.closeConfirmDialog = function closeConfirmDialog() {
+      document.getElementById('confirmModal').classList.add('hidden');
+    };
+
+    // =========================================================================
+    // 11. PWA MANIFEST & APP BOOTSTRAP
+    // =========================================================================
+    function initPwaManifest() {
+      try {
+        const iconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#2C1E16"/><circle cx="256" cy="256" r="160" fill="#C86D51"/><path d="M176 280c0-44 36-80 80-80s80 36 80 80" fill="none" stroke="#FAF6F0" stroke-width="28" stroke-linecap="round"/><circle cx="256" cy="172" r="20" fill="#FAF6F0"/></svg>`;
+        const iconUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(iconSvg);
+        const manifestObj = {
+          name: 'Dapur PO — Manajemen Pre-Order Kue',
+          short_name: 'Dapur PO',
+          start_url: './',
+          display: 'standalone',
+          background_color: '#FAF6F0',
+          theme_color: '#2C1E16',
+          icons: [
+            { src: iconUrl, sizes: '192x192', type: 'image/svg+xml' },
+            { src: iconUrl, sizes: '512x512', type: 'image/svg+xml' }
+          ]
+        };
+        const manifestEl = document.getElementById('pwa-manifest');
+        if (manifestEl) {
+          manifestEl.href = 'data:application/manifest+json;charset=utf-8,' + encodeURIComponent(JSON.stringify(manifestObj));
+        }
+      } catch (_) {}
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      initPwaManifest();
+      renderAllViews();
+
       if (hasGasConfig()) {
         setTimeout(() => runAutoPullIfEnabled(), 6500);
         setInterval(() => runAutoPullIfEnabled(), 25000);
