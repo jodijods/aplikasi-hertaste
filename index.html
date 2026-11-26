@@ -1150,12 +1150,6 @@
         if (err && err.message && err.message !== 'NON_JSON_REDIRECT' && !String(err.message).toLowerCase().includes('fetch')) {
           throw err;
         }
-        if (navigator.sendBeacon) {
-          try {
-            const blob = new Blob([rawJson], { type: 'text/plain;charset=utf-8' });
-            navigator.sendBeacon(urlStr, blob);
-          } catch (_) {}
-        }
         return await gasFormIframePost(urlStr, fullPayload);
       }
     }
