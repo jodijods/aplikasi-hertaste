@@ -774,6 +774,14 @@
     const DEFAULT_GAS_API_TOKEN = '';
 
     // Definisikan fungsi modal sinkronisasi lebih awal pada window agar tidak pernah ReferenceError
+    window.refreshIcons = function refreshIcons() {
+      try {
+        if (typeof lucide !== 'undefined' && lucide && typeof lucide.createIcons === 'function') {
+          lucide.createIcons();
+        }
+      } catch (_) {}
+    };
+
     window.openSyncModal = function openSyncModal() {
       const urlEl = document.getElementById('modalGasUrl');
       const tokEl = document.getElementById('modalApiToken');
@@ -785,7 +793,7 @@
       if (typeof updateSyncStatusUI === 'function') updateSyncStatusUI();
       const modal = document.getElementById('syncModal');
       if (modal) modal.classList.remove('hidden');
-      if (window.lucide) lucide.createIcons();
+      refreshIcons();
     };
 
     window.closeSyncModal = function closeSyncModal() {
@@ -1049,7 +1057,7 @@
       inp.type = show ? 'text' : 'password';
       if (icn) {
         icn.setAttribute('data-lucide', show ? 'eye-off' : 'eye');
-        if (window.lucide) lucide.createIcons();
+        refreshIcons();
       }
     }
 
@@ -1151,6 +1159,7 @@
       if (!webAppUrl.endsWith('/exec')) {
         throw new Error('URL harus berakhiran /exec (bukan /dev atau link editor).');
       }
+
       const payloadWithToken = Object.assign({}, bodyObj, { token: apiToken });
       const rawJson = JSON.stringify(payloadWithToken);
 
@@ -1165,23 +1174,50 @@
         const text = await res.text();
         const json = JSON.parse(text);
         if (!json || json.ok === false) {
-          throw new Error((json && json.error) || 'Respons POST gagal dari Apps Script.');
+          throw new Error((json && json.error) || 'Gagal menyimpan ke Google Sheets.');
         }
         return json;
-      } catch (postErr) {
-        if (postErr && postErr.message && postErr.message.includes('Unauthorized')) {
-          throw postErr;
+      } catch (err) {
+        if (err && err.message && err.message.includes('Unauthorized')) {
+          throw err;
         }
-        // Fallback no-cors POST agar request tetap sampai ke doPost Apps Script saat redirect diblokir browser
+        // Fallback form POST tersembunyi agar body tetap terbaca di e.parameter.payload pada doPost
         try {
-          await fetch(webAppUrl, {
-            method: 'POST',
-            mode: 'no-cors',
-            cache: 'no-store',
-            headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-            body: rawJson
+          await new Promise((resolve) => {
+            const iframeName = '__dapurPoPostFrame_' + Date.now();
+            const iframe = document.createElement('iframe');
+            iframe.name = iframeName;
+            iframe.style.display = 'none';
+
+            const form = document.createElement('form');
+            form.method = 'POST';
+            form.action = webAppUrl;
+            form.target = iframeName;
+            form.style.display = 'none';
+
+            const inputPayload = document.createElement('input');
+            inputPayload.type = 'hidden';
+            inputPayload.name = 'payload';
+            inputPayload.value = rawJson;
+            form.appendChild(inputPayload);
+
+            const inputToken = document.createElement('input');
+            inputToken.type = 'hidden';
+            inputToken.name = 'token';
+            inputToken.value = apiToken;
+            form.appendChild(inputToken);
+
+            document.body.appendChild(iframe);
+            document.body.appendChild(form);
+            form.submit();
+
+            setTimeout(() => {
+              if (form.parentNode) form.parentNode.removeChild(form);
+              if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+              resolve();
+            }, 1800);
           });
-          return { ok: true, opaque: true, syncedAt: new Date().toISOString() };
+          return { ok: true, formFallback: true, syncedAt: new Date().toISOString() };
         } catch (noCorsErr) {
           throw new Error('Gagal mengirim data ke Google Apps Script. Cek koneksi internet & URL /exec.');
         }
@@ -1387,10 +1423,21 @@
     window.pushAllToGoogleSheets = pushAllToGoogleSheets;
 
     let autoSyncTimer = null;
+    let isSyncInProgress = false;
+
+    function isUserEditingModal() {
+      const modals = ['orderModal', 'menuModal', 'syncModal'];
+      return modals.some(id => {
+        const el = document.getElementById(id);
+        return el && !el.classList.contains('hidden');
+      });
+    }
+
     function triggerAutoSync(action, payload) {
       if (autoSyncTimer) clearTimeout(autoSyncTimer);
       autoSyncTimer = setTimeout(async () => {
         if (!hasGasConfig()) return;
+        isSyncInProgress = true;
         setSyncBusyState(true);
         try {
           if (action === 'upsertOrder' && payload) {
@@ -1408,65 +1455,21 @@
         } catch (err) {
           recordSyncResult('error', `Auto-sync tertunda: ${err.message}`);
         } finally {
+          isSyncInProgress = false;
           setSyncBusyState(false);
         }
       }, 400);
     }
 
-    // =========================================================================
-    // 2. FORMATTING & UTILITY HELPERS
-    // =========================================================================
-    function formatRupiah(num) {
-      const n = Number(num) || 0;
-      return 'Rp ' + n.toLocaleString('id-ID');
-    }
-
-    function formatDateIndo(isoDate) {
-      if (!isoDate) return '-';
-      const parts = isoDate.split('-');
-      if (parts.length !== 3) return isoDate;
-      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-      const day = parseInt(parts[2], 10);
-      const monthName = months[parseInt(parts[1], 10) - 1] || parts[1];
-      return `${day} ${monthName} ${parts[0]}`;
-    }
-
-    function getOrderSubtotal(order) {
-      return (order.items || []).reduce((sum, item) => sum + (Number(item.qty) || 0) * (Number(item.price) || 0), 0);
-    }
-
-    function getOrderTotal(order) {
-      return getOrderSubtotal(order) + (Number(order.shippingFee) || 0);
-    }
-
-    function getOrderPaid(order) {
-      const total = getOrderTotal(order);
-      if (order.paymentStatus === 'Lunas') return total;
-      if (order.paymentStatus === 'DP') return Math.min(total, Number(order.dpAmount) || 0);
-      return 0;
-    }
-
-    function getOrderRemaining(order) {
-      return Math.max(0, getOrderTotal(order) - getOrderPaid(order));
-    }
-
-    function showToast(msg) {
-      const toast = document.getElementById('toast');
-      toast.textContent = msg;
-      toast.classList.remove('hidden');
-      clearTimeout(window.__toastTimer);
-      window.__toastTimer = setTimeout(() => {
-        toast.classList.add('hidden');
-      }, 2600);
-    }
-
-    function copyTextToClipboard(text, successMsg = 'Teks berhasil disalin!') {
-      if (navigator.clipboard && window.isSecureContext) {
-        navigator.clipboard.writeText(text)
-          .then(() => showToast(successMsg))
-          .catch(() => fallbackCopyText(text, successMsg));
-      } else {
-        fallbackCopyText(text, successMsg);
+    async function runAutoPullIfEnabled() {
+      if (!hasGasConfig()) return;
+      if (appData.sync && appData.sync.autoSync === false) return;
+      if (isSyncInProgress || autoSyncTimer || isUserEditingModal()) return;
+      isSyncInProgress = true;
+      try {
+        await pullFromGoogleSheets(true);
+      } finally {
+        isSyncInProgress = false;
       }
     }
 
@@ -1485,6 +1488,57 @@
         showToast('Gagal menyalin teks.');
       }
       document.body.removeChild(ta);
+    }
+
+    function formatRupiah(amount) {
+      const num = Number(amount) || 0;
+      return 'Rp ' + num.toLocaleString('id-ID');
+    }
+
+    function formatDateIndo(isoDate) {
+      if (!isoDate) return '-';
+      const parts = String(isoDate).split('T')[0].split('-');
+      if (parts.length !== 3) return isoDate;
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+      const monthIdx = parseInt(parts[1], 10) - 1;
+      return `${parseInt(parts[2], 10)} ${months[monthIdx] || parts[1]} ${parts[0]}`;
+    }
+
+    function getOrderSubtotal(order) {
+      if (!order || !Array.isArray(order.items)) return 0;
+      return order.items.reduce((sum, item) => sum + ((Number(item.qty) || 0) * (Number(item.price) || 0)), 0);
+    }
+
+    function getOrderTotal(order) {
+      return getOrderSubtotal(order) + (Number(order && order.shippingFee) || 0);
+    }
+
+    function getOrderPaid(order) {
+      if (!order) return 0;
+      const total = getOrderTotal(order);
+      if (order.paymentStatus === 'Lunas') return total;
+      if (order.paymentStatus === 'DP') return Math.min(total, Number(order.dpAmount) || 0);
+      return 0;
+    }
+
+    function getOrderRemaining(order) {
+      return Math.max(0, getOrderTotal(order) - getOrderPaid(order));
+    }
+
+    let toastTimer = null;
+    function showToast(message) {
+      const el = document.getElementById('toast');
+      if (!el) return;
+      el.textContent = message;
+      el.classList.remove('hidden');
+      if (toastTimer) clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => {
+        el.classList.add('hidden');
+      }, 2800);
+    }
+
+    function copyTextToClipboard(text, successMsg = 'Teks berhasil disalin!') {
+      fallbackCopyText(text, successMsg);
     }
 
     function openConfirmDialog(title, message, onConfirm) {
@@ -1544,7 +1598,7 @@
       if (tabName === 'expenses') renderExpenses();
       if (tabName === 'settings') renderSettings();
 
-      lucide.createIcons();
+      refreshIcons();
     }
 
     // =========================================================================
@@ -1667,7 +1721,7 @@
           `;
         }).join('');
       }
-      lucide.createIcons();
+      refreshIcons();
     }
 
     function copyBakingListText() {
@@ -1821,7 +1875,7 @@
           </div>
         `;
       }).join('');
-      lucide.createIcons();
+      refreshIcons();
     }
 
     function quickUpdateOrderStatus(orderId, newStatus) {
@@ -1894,7 +1948,7 @@
       toggleDpInput();
       recalculateOrderModalTotal();
       modal.classList.remove('hidden');
-      lucide.createIcons();
+      refreshIcons();
     }
 
     function closeOrderModal() {
@@ -1934,7 +1988,7 @@
         </div>
       `;
       container.appendChild(row);
-      lucide.createIcons();
+      refreshIcons();
     }
 
     function onSelectCatalogMenu(selectEl) {
@@ -2115,7 +2169,7 @@
       document.getElementById('waDirectLink').href = waUrl;
 
       document.getElementById('receiptModal').classList.remove('hidden');
-      lucide.createIcons();
+      refreshIcons();
     }
 
     function closeReceiptModal() {
@@ -2205,7 +2259,7 @@
           </div>
         `;
       }).join('');
-      lucide.createIcons();
+      refreshIcons();
     }
 
     function openMenuModal(menuId = null) {
@@ -2227,7 +2281,7 @@
         document.getElementById('menuQuota').value = 20;
       }
       document.getElementById('menuModal').classList.remove('hidden');
-      lucide.createIcons();
+      refreshIcons();
     }
 
     function closeMenuModal() {
@@ -2341,7 +2395,7 @@
           </div>
         </div>
       `).join('');
-      lucide.createIcons();
+      refreshIcons();
     }
 
     function deleteExpense(expId) {
@@ -2466,36 +2520,33 @@
     })();
 
     window.addEventListener('DOMContentLoaded', () => {
-      document.getElementById('expDate').value = getTodayISO();
+      const expDateEl = document.getElementById('expDate');
+      if (expDateEl) expDateEl.value = getTodayISO();
       updateBrandTitles();
       renderDashboard();
       updateSyncStatusUI();
-      lucide.createIcons();
+      refreshIcons();
 
-      // Daftarkan Service Worker versi terbaru agar tidak menahan request ke Google Apps Script
-      if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) {
-        const swCode = `
-          const CACHE_NAME = 'dapur-po-v3-gas-fix';
-          self.addEventListener('install', (e) => self.skipWaiting());
-          self.addEventListener('activate', (e) => {
-            e.waitUntil(
-              caches.keys().then((keys) =>
-                Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-              ).then(() => self.clients.claim())
-            );
-          });
-          self.addEventListener('fetch', (e) => {
-            const url = e.request.url || '';
-            if (url.includes('script.google.com') || url.includes('script.googleusercontent.com') || e.request.method !== 'GET') {
-              return;
-            }
-            e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
-          });
-        `;
-        const swBlob = new Blob([swCode], { type: 'application/javascript' });
-        const swUrl = URL.createObjectURL(swBlob);
-        navigator.serviceWorker.register(swUrl).catch(() => {});
+      // Bersihkan Service Worker lama yang mungkin menahan request ke Google Apps Script
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.getRegistrations().then((regs) => {
+          regs.forEach((reg) => reg.unregister().catch(() => {}));
+        }).catch(() => {});
       }
+
+      // Auto-pull otomatis saat aplikasi dibuka, kembali aktif di layar HP, dan berkala tiap 25 detik
+      setTimeout(() => runAutoPullIfEnabled(), 900);
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'visible') {
+          runAutoPullIfEnabled();
+        }
+      });
+      window.addEventListener('focus', () => runAutoPullIfEnabled());
+      setInterval(() => {
+        if (document.visibilityState === 'visible') {
+          runAutoPullIfEnabled();
+        }
+      }, 25000);
     });
   </script>
 </body>
