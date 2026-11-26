@@ -764,7 +764,7 @@
     const DEFAULT_GAS_WEB_APP_URL = '';
     const DEFAULT_GAS_API_TOKEN = '';
 
-    // Definisikan fungsi modal sinkronisasi lebih awal pada window agar tidak pernah ReferenceError
+    // Definisikan helper global lebih awal pada window agar tidak pernah ReferenceError
     window.refreshIcons = function refreshIcons() {
       try {
         if (typeof lucide !== 'undefined' && lucide && typeof lucide.createIcons === 'function') {
@@ -822,7 +822,8 @@
           autoSync: true,
           lastSyncedAt: null,
           lastStatus: 'idle',
-          lastMessage: ''
+          lastMessage: '',
+          pendingSync: false
         },
         menus: [
           { id: 'm1', name: 'Nastar Wisman Klasik (500gr)', category: 'Kue Kering', price: 145000, quota: 30 },
@@ -885,13 +886,16 @@
           return initial;
         }
         const parsed = JSON.parse(raw);
+        const def = getDefaultData();
+        parsed.settings = Object.assign({}, def.settings, parsed.settings || {});
         parsed.sync = Object.assign({
           webAppUrl: DEFAULT_GAS_WEB_APP_URL,
           apiToken: DEFAULT_GAS_API_TOKEN,
           autoSync: true,
           lastSyncedAt: null,
           lastStatus: 'idle',
-          lastMessage: ''
+          lastMessage: '',
+          pendingSync: false
         }, parsed.sync || {});
         if (!parsed.sync.webAppUrl && DEFAULT_GAS_WEB_APP_URL) {
           parsed.sync.webAppUrl = DEFAULT_GAS_WEB_APP_URL;
@@ -899,35 +903,36 @@
         if (!parsed.sync.apiToken && DEFAULT_GAS_API_TOKEN) {
           parsed.sync.apiToken = DEFAULT_GAS_API_TOKEN;
         }
+        if (!Array.isArray(parsed.menus)) parsed.menus = def.menus;
+        if (!Array.isArray(parsed.orders)) parsed.orders = [];
+        if (!Array.isArray(parsed.expenses)) parsed.expenses = [];
         return parsed;
       } catch (e) {
-        console.error('Gagal memuat data:', e);
         return getDefaultData();
       }
     }
 
     let appData = loadData();
-    let currentTab = 'dashboard';
-    let orderStatusFilter = 'ALL';
-    let confirmCallback = null;
-    let lastLocalMutationAt = Number(localStorage.getItem('dapur_po_last_mutation') || 0);
+    let currentOrderStatusFilter = 'ALL';
+    let autoSyncTimer = null;
+    let isSyncInProgress = false;
+    let lastLocalMutationAt = 0;
 
     function markLocalMutation() {
       lastLocalMutationAt = Date.now();
-      try {
-        localStorage.setItem('dapur_po_last_mutation', String(lastLocalMutationAt));
-      } catch (_) {}
     }
 
     function saveData(options = {}) {
       const { skipAutoSync = false, syncAction = 'syncAll', syncPayload = null } = options;
       try {
+        if (!appData.sync) appData.sync = {};
         if (!skipAutoSync) {
           markLocalMutation();
+          appData.sync.pendingSync = true;
         }
         localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
         updateSyncStatusUI();
-        if (!skipAutoSync && appData.sync && appData.sync.autoSync && hasGasConfig()) {
+        if (!skipAutoSync && appData.sync.autoSync && hasGasConfig()) {
           triggerAutoSync(syncAction, syncPayload);
         }
       } catch (e) {
@@ -936,317 +941,427 @@
     }
 
     // =========================================================================
-    // 1B. GOOGLE APPS SCRIPT (/exec) SYNC ENGINE WITH API_TOKEN & JSONP/FETCH
+    // 2. GOOGLE APPS SCRIPT SYNC CLIENT (/exec + API_TOKEN + JSONP/POST)
     // =========================================================================
+    function sanitizeWebAppUrl(rawUrl) {
+      let clean = String(rawUrl || '').trim();
+      if (!clean) return '';
+      const qIndex = clean.indexOf('?');
+      if (qIndex !== -1) clean = clean.slice(0, qIndex);
+      const hIndex = clean.indexOf('#');
+      if (hIndex !== -1) clean = clean.slice(0, hIndex);
+      return clean;
+    }
+
     function hasGasConfig() {
-      const url = (appData.sync && appData.sync.webAppUrl || '').trim();
-      const token = (appData.sync && appData.sync.apiToken || '').trim();
+      const url = sanitizeWebAppUrl(appData.sync && appData.sync.webAppUrl);
+      const token = String((appData.sync && appData.sync.apiToken) || '').trim();
       return Boolean(url && token);
     }
 
-    function getCleanGasConfig(urlInputId = null, tokenInputId = null) {
-      const urlEl = urlInputId ? document.getElementById(urlInputId) : null;
-      const tokEl = tokenInputId ? document.getElementById(tokenInputId) : null;
-      let webAppUrl = (urlEl ? urlEl.value : (appData.sync && appData.sync.webAppUrl) || '').trim();
-      if (webAppUrl.includes('/exec?')) {
-        webAppUrl = webAppUrl.split('?')[0];
-      }
-      const apiToken = (tokEl ? tokEl.value : (appData.sync && appData.sync.apiToken) || '').trim();
-      return { webAppUrl, apiToken };
-    }
-
-    function formatSyncTimestamp(isoStr) {
-      if (!isoStr) return '-';
-      try {
-        const d = new Date(isoStr);
-        if (isNaN(d.getTime())) return isoStr;
-        return d.toLocaleString('id-ID', {
-          day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', second: '2-digit'
-        });
-      } catch (_) {
-        return isoStr;
-      }
-    }
-
-    function setSyncBusyState(isBusy) {
-      const icon = document.getElementById('headerSyncIcon');
-      if (icon) {
-        if (isBusy) icon.classList.add('animate-spin');
-        else icon.classList.remove('animate-spin');
-      }
-    }
-
-    function recordSyncResult(status, message, timestampIso = null) {
-      if (!appData.sync) appData.sync = {};
-      appData.sync.lastStatus = status;
-      appData.sync.lastMessage = message;
-      if (timestampIso) {
-        appData.sync.lastSyncedAt = timestampIso;
-      } else if (status === 'success') {
-        appData.sync.lastSyncedAt = new Date().toISOString();
-      }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-      updateSyncStatusUI();
-    }
-
-    function escapeHtml(str) {
-      return String(str || '')
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
-    }
-
-    function updateSyncStatusUI() {
-      const configured = hasGasConfig();
-      const status = (appData.sync && appData.sync.lastStatus) || 'idle';
-      const lastStr = formatSyncTimestamp(appData.sync && appData.sync.lastSyncedAt);
-      const msg = (appData.sync && appData.sync.lastMessage) || '';
-
-      const dot = document.getElementById('headerSyncDot');
-      if (dot) {
-        dot.className = 'w-2 h-2 rounded-full ' + (
-          status === 'syncing' ? 'bg-blue-500 animate-pulse' :
-          status === 'error' ? 'bg-red-500' :
-          status === 'success' ? 'bg-emerald-500' :
-          configured ? 'bg-amber-500' : 'bg-espresso/30'
-        );
-      }
-
-      const badge = document.getElementById('settingsSyncBadge');
-      if (badge) {
-        if (!configured) {
-          badge.className = 'px-2.5 py-1 rounded-full bg-creamDark text-espresso/75 text-[11px] font-semibold';
-          badge.textContent = 'Belum dikonfigurasi';
-        } else if (status === 'error') {
-          badge.className = 'px-2.5 py-1 rounded-full bg-red-100 text-red-700 text-[11px] font-bold';
-          badge.textContent = 'Gagal Sync';
-        } else if (status === 'success') {
-          badge.className = 'px-2.5 py-1 rounded-full bg-sageBg text-sage text-[11px] font-bold';
-          badge.textContent = 'Tersinkronisasi';
-        } else {
-          badge.className = 'px-2.5 py-1 rounded-full bg-amberBg text-amber-800 text-[11px] font-bold';
-          badge.textContent = 'Siap Sync';
-        }
-      }
-
-      const lastEl = document.getElementById('settingsLastSyncText');
-      if (lastEl) lastEl.textContent = `Terakhir sync: ${lastStr}`;
-
-      const logEl = document.getElementById('settingsSyncLog');
-      if (logEl && msg) {
-        logEl.innerHTML = `<b>[${lastStr}]</b> ${escapeHtml(msg)}`;
-      }
-
-      const modalSub = document.getElementById('modalSyncStatusSub');
-      if (modalSub) {
-        modalSub.textContent = configured
-          ? `Terakhir sync: ${lastStr}`
-          : 'URL /exec atau API_TOKEN belum diisi';
-      }
-
-      const modalFb = document.getElementById('modalSyncFeedback');
-      if (modalFb && msg) {
-        modalFb.innerHTML = `<span class="font-semibold">[${lastStr}]</span> ${escapeHtml(msg)}`;
-      }
-    }
-
     function toggleTokenVisibility(inputId, iconId) {
-      const inp = document.getElementById(inputId);
-      const icn = document.getElementById(iconId);
-      if (!inp) return;
-      const show = inp.type === 'password';
-      inp.type = show ? 'text' : 'password';
-      if (icn) {
-        icn.setAttribute('data-lucide', show ? 'eye-off' : 'eye');
+      const input = document.getElementById(inputId);
+      const icon = document.getElementById(iconId);
+      if (!input) return;
+      const isHidden = input.type === 'password';
+      input.type = isHidden ? 'text' : 'password';
+      if (icon) {
+        icon.setAttribute('data-lucide', isHidden ? 'eye-off' : 'eye');
         refreshIcons();
       }
     }
 
     function saveSyncFieldsFromModal() {
-      if (!appData.sync) appData.sync = {};
-      const urlEl = document.getElementById('modalGasUrl');
-      const tokEl = document.getElementById('modalApiToken');
-      const autoEl = document.getElementById('modalAutoSync');
-      if (urlEl) appData.sync.webAppUrl = urlEl.value.trim();
-      if (tokEl) appData.sync.apiToken = tokEl.value.trim();
-      if (autoEl) appData.sync.autoSync = autoEl.checked;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-      if (typeof renderSettings === 'function') renderSettings();
-      updateSyncStatusUI();
+      const url = sanitizeWebAppUrl(document.getElementById('modalGasUrl')?.value);
+      const token = (document.getElementById('modalApiToken')?.value || '').trim();
+      const autoSync = Boolean(document.getElementById('modalAutoSync')?.checked);
+      const modalUrlInput = document.getElementById('modalGasUrl');
+      if (modalUrlInput) modalUrlInput.value = url;
+      appData.sync = Object.assign({}, appData.sync, { webAppUrl: url, apiToken: token, autoSync });
+      saveData({ skipAutoSync: true });
+      populateSettingsForm();
     }
 
     function handleSaveSyncConfig(e) {
-      if (e && e.preventDefault) e.preventDefault();
-      if (!appData.sync) appData.sync = {};
-      const urlEl = document.getElementById('setGasUrl');
-      const tokEl = document.getElementById('setApiToken');
-      const autoEl = document.getElementById('setAutoSync');
-      if (urlEl) appData.sync.webAppUrl = urlEl.value.trim();
-      if (tokEl) appData.sync.apiToken = tokEl.value.trim();
-      if (autoEl) appData.sync.autoSync = autoEl.checked;
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
-      updateSyncStatusUI();
-      showToast('Konfigurasi Google Sheets & API_TOKEN disimpan!');
+      e.preventDefault();
+      const url = sanitizeWebAppUrl(document.getElementById('setGasUrl')?.value);
+      const token = (document.getElementById('setApiToken')?.value || '').trim();
+      const autoSync = Boolean(document.getElementById('setAutoSync')?.checked);
+      const setUrlInput = document.getElementById('setGasUrl');
+      if (setUrlInput) setUrlInput.value = url;
+      appData.sync = Object.assign({}, appData.sync, { webAppUrl: url, apiToken: token, autoSync });
+      saveData({ skipAutoSync: true });
+      recordSyncResult('idle', 'Konfigurasi Web App URL & API_TOKEN berhasil disimpan.');
+      showToast('Konfigurasi Google Sheets disimpan!');
     }
 
-    async function gasGetRequest(action = 'all', cfgOverride = null) {
-      const { webAppUrl, apiToken } = cfgOverride || getCleanGasConfig();
-      if (!webAppUrl || !apiToken) {
-        throw new Error('Isi Web App URL (/exec) dan API_TOKEN terlebih dahulu.');
+    function setSyncBusyState(busy) {
+      const icon = document.getElementById('headerSyncIcon');
+      if (icon) {
+        if (busy) icon.classList.add('animate-spin');
+        else icon.classList.remove('animate-spin');
       }
-      if (!webAppUrl.endsWith('/exec')) {
+    }
+
+    function recordSyncResult(status, message, syncedAt = null) {
+      if (!appData.sync) appData.sync = {};
+      appData.sync.lastStatus = status;
+      appData.sync.lastMessage = message;
+      if (syncedAt) appData.sync.lastSyncedAt = syncedAt;
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+      } catch (_) {}
+      updateSyncStatusUI();
+    }
+
+    function updateSyncStatusUI() {
+      const sync = appData.sync || {};
+      const configured = hasGasConfig();
+      const dot = document.getElementById('headerSyncDot');
+      const badge = document.getElementById('settingsSyncBadge');
+      const lastText = document.getElementById('settingsLastSyncText');
+      const modalSub = document.getElementById('modalSyncStatusSub');
+      const modalFeedback = document.getElementById('modalSyncFeedback');
+      const setLog = document.getElementById('settingsSyncLog');
+
+      const formattedTime = sync.lastSyncedAt
+        ? new Date(sync.lastSyncedAt).toLocaleString('id-ID', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
+        : '-';
+
+      if (lastText) lastText.textContent = `Terakhir sync: ${formattedTime}`;
+      if (modalSub) {
+        modalSub.textContent = configured
+          ? `Terakhir sync: ${formattedTime}`
+          : 'Belum terhubung — isi URL /exec & API_TOKEN';
+      }
+
+      if (dot) {
+        dot.className = 'w-2 h-2 rounded-full ' + (
+          !configured ? 'bg-amber-500' :
+          sync.lastStatus === 'success' ? 'bg-emerald-500' :
+          sync.lastStatus === 'error' ? 'bg-red-500' : 'bg-sky-500'
+        );
+      }
+
+      if (badge) {
+        if (!configured) {
+          badge.className = 'px-2.5 py-1 rounded-full bg-creamDark text-espresso/75 text-[11px] font-semibold';
+          badge.textContent = 'Belum dikonfigurasi';
+        } else if (sync.lastStatus === 'success') {
+          badge.className = 'px-2.5 py-1 rounded-full bg-sageBg text-sage text-[11px] font-bold';
+          badge.textContent = 'Tersinkronisasi';
+        } else if (sync.lastStatus === 'error') {
+          badge.className = 'px-2.5 py-1 rounded-full bg-red-100 text-red-700 text-[11px] font-bold';
+          badge.textContent = 'Gagal Sync';
+        } else {
+          badge.className = 'px-2.5 py-1 rounded-full bg-amberBg text-amber-800 text-[11px] font-semibold';
+          badge.textContent = 'Siap Sync';
+        }
+      }
+
+      if (sync.lastMessage) {
+        const isErr = sync.lastStatus === 'error';
+        const colorClass = isErr ? 'text-red-700 bg-red-50 border-red-200' : 'text-espresso/85 bg-white border-espresso/10';
+        if (modalFeedback) {
+          modalFeedback.className = `p-3 rounded-xl border text-xs leading-relaxed ${colorClass}`;
+          modalFeedback.textContent = sync.lastMessage;
+        }
+        if (setLog) {
+          setLog.className = `p-3 rounded-xl border text-[11px] leading-relaxed ${colorClass}`;
+          setLog.textContent = sync.lastMessage;
+        }
+      }
+    }
+
+    function gasJsonpRequest(endpointUrl, params = {}) {
+      return new Promise((resolve, reject) => {
+        const cbName = '__dapurPoGasCb_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+        const script = document.createElement('script');
+        let finished = false;
+
+        const cleanup = () => {
+          if (script.parentNode) script.parentNode.removeChild(script);
+          try { delete window[cbName]; } catch (_) { window[cbName] = undefined; }
+        };
+
+        const timer = setTimeout(() => {
+          if (finished) return;
+          finished = true;
+          cleanup();
+          reject(new Error('Timeout membaca respons Google Apps Script (pastikan deployment berstatus Anyone & berakhiran /exec).'));
+        }, 15000);
+
+        window[cbName] = function (data) {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          cleanup();
+          if (!data || data.ok === false) {
+            reject(new Error((data && data.error) || 'Respons API Google Sheets tidak valid'));
+            return;
+          }
+          resolve(data);
+        };
+
+        const url = new URL(endpointUrl);
+        Object.entries(params).forEach(([k, v]) => {
+          if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+        });
+        url.searchParams.set('callback', cbName);
+        url.searchParams.set('_ts', String(Date.now()));
+
+        script.src = url.toString();
+        script.async = true;
+        script.onerror = function () {
+          if (finished) return;
+          finished = true;
+          clearTimeout(timer);
+          cleanup();
+          reject(new Error('Gagal memuat skrip dari Google Apps Script (cek URL /exec dan akses Anyone).'));
+        };
+        document.head.appendChild(script);
+      });
+    }
+
+    async function gasGetRequest(action, extraParams = {}, overrideConfig = null) {
+      const urlStr = sanitizeWebAppUrl(overrideConfig ? overrideConfig.webAppUrl : (appData.sync && appData.sync.webAppUrl));
+      const token = String(overrideConfig ? overrideConfig.apiToken : ((appData.sync && appData.sync.apiToken) || '')).trim();
+      if (!urlStr || !token) {
+        throw new Error('Web App URL (/exec) dan API_TOKEN wajib diisi terlebih dahulu.');
+      }
+      if (!urlStr.includes('/exec')) {
         throw new Error('URL harus berakhiran /exec (bukan /dev atau link editor).');
       }
-      const sep = webAppUrl.includes('?') ? '&' : '?';
-      const baseQuery = `${webAppUrl}${sep}action=${encodeURIComponent(action)}&token=${encodeURIComponent(apiToken)}&_t=${Date.now()}`;
 
-      // 1. Coba fetch standar terlebih dahulu
+      const queryParams = Object.assign({ action, token }, extraParams);
       try {
-        const res = await fetch(baseQuery, {
+        return await gasJsonpRequest(urlStr, queryParams);
+      } catch (jsonpErr) {
+        const url = new URL(urlStr);
+        Object.entries(queryParams).forEach(([k, v]) => {
+          if (v !== undefined && v !== null) url.searchParams.set(k, String(v));
+        });
+        url.searchParams.set('_ts', String(Date.now()));
+
+        const response = await fetch(url.toString(), {
           method: 'GET',
           redirect: 'follow',
           cache: 'no-store'
         });
-        const text = await res.text();
-        const json = JSON.parse(text);
-        if (!json || json.ok === false) {
-          throw new Error((json && json.error) || 'Respons GET gagal dari Apps Script.');
+        const text = await response.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (_) {
+          throw new Error(jsonpErr.message);
         }
-        return json;
-      } catch (fetchErr) {
-        if (fetchErr && fetchErr.message && fetchErr.message.includes('Unauthorized')) {
-          throw fetchErr;
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || `HTTP ${response.status}`);
         }
-        // 2. Fallback JSONP (<script>) untuk menembus blokir CORS/redirect di browser HP/PWA
-        return await new Promise((resolve, reject) => {
-          const cbName = '__dapurPoJsonp_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
-          const script = document.createElement('script');
-          const timer = setTimeout(() => {
-            cleanup();
-            reject(new Error('Timeout menghubungi Google Apps Script. Cek internet & izin deployment "Anyone".'));
-          }, 15000);
-
-          function cleanup() {
-            clearTimeout(timer);
-            delete window[cbName];
-            if (script.parentNode) script.parentNode.removeChild(script);
-          }
-
-          window[cbName] = function(data) {
-            cleanup();
-            if (!data || data.ok === false) {
-              reject(new Error((data && data.error) || 'Gagal membaca data dari Apps Script.'));
-            } else {
-              resolve(data);
-            }
-          };
-
-          script.onerror = function() {
-            cleanup();
-            reject(new Error('URL /exec tidak dapat dimuat. Pastikan URL benar & deployment berstatus "Anyone".'));
-          };
-
-          script.src = `${baseQuery}&callback=${encodeURIComponent(cbName)}`;
-          document.body.appendChild(script);
-        });
+        return data;
       }
     }
 
-    async function gasPostRequest(bodyObj, cfgOverride = null) {
-      const { webAppUrl, apiToken } = cfgOverride || getCleanGasConfig();
-      if (!webAppUrl || !apiToken) {
-        throw new Error('Isi Web App URL (/exec) dan API_TOKEN terlebih dahulu.');
+    function gasFormIframePost(urlStr, payloadObj) {
+      return new Promise((resolve) => {
+        const iframeName = 'gasPostFrame_' + Date.now() + '_' + Math.floor(Math.random() * 10000);
+        const iframe = document.createElement('iframe');
+        iframe.name = iframeName;
+        iframe.style.display = 'none';
+
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = urlStr;
+        form.target = iframeName;
+        form.style.display = 'none';
+
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'payload';
+        input.value = JSON.stringify(payloadObj);
+        form.appendChild(input);
+
+        document.body.appendChild(iframe);
+        document.body.appendChild(form);
+
+        let cleaned = false;
+        const cleanup = () => {
+          if (cleaned) return;
+          cleaned = true;
+          setTimeout(() => {
+            if (form.parentNode) form.parentNode.removeChild(form);
+            if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+          }, 1200);
+          resolve({ ok: true, syncedAt: new Date().toISOString() });
+        };
+
+        iframe.onload = cleanup;
+        setTimeout(cleanup, 3000);
+        form.submit();
+      });
+    }
+
+    async function gasPostRequest(payloadObj) {
+      const urlStr = sanitizeWebAppUrl(appData.sync && appData.sync.webAppUrl);
+      const token = String((appData.sync && appData.sync.apiToken) || '').trim();
+      if (!urlStr || !token) {
+        throw new Error('Web App URL (/exec) dan API_TOKEN belum dikonfigurasi.');
       }
-      if (!webAppUrl.endsWith('/exec')) {
-        throw new Error('URL harus berakhiran /exec (bukan /dev atau link editor).');
+      if (!urlStr.includes('/exec')) {
+        throw new Error('URL harus berakhiran /exec.');
       }
 
-      const payloadWithToken = Object.assign({}, bodyObj, { token: apiToken });
-      const rawJson = JSON.stringify(payloadWithToken);
-
+      const fullPayload = Object.assign({}, payloadObj, { token });
       try {
-        const res = await fetch(webAppUrl, {
+        const response = await fetch(urlStr, {
           method: 'POST',
           redirect: 'follow',
           cache: 'no-store',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-          body: rawJson
+          body: JSON.stringify(fullPayload)
         });
-        const text = await res.text();
-        const json = JSON.parse(text);
-        if (!json || json.ok === false) {
-          throw new Error((json && json.error) || 'Gagal menyimpan ke Google Sheets.');
+        const text = await response.text();
+        let data;
+        try {
+          data = JSON.parse(text);
+        } catch (_) {
+          throw new Error('NON_JSON_REDIRECT');
         }
-        return json;
+        if (!response.ok || !data.ok) {
+          throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        return data;
       } catch (err) {
-        if (err && err.message && err.message.includes('Unauthorized')) {
+        if (err && err.message && err.message !== 'NON_JSON_REDIRECT' && !String(err.message).toLowerCase().includes('fetch')) {
           throw err;
         }
-        // Fallback form POST tersembunyi agar body tetap terbaca di e.parameter.payload pada doPost
-        try {
-          await new Promise((resolve) => {
-            const iframeName = '__dapurPoPostFrame_' + Date.now();
-            const iframe = document.createElement('iframe');
-            iframe.name = iframeName;
-            iframe.style.display = 'none';
-
-            const form = document.createElement('form');
-            form.method = 'POST';
-            form.action = webAppUrl;
-            form.target = iframeName;
-            form.style.display = 'none';
-
-            const inputPayload = document.createElement('input');
-            inputPayload.type = 'hidden';
-            inputPayload.name = 'payload';
-            inputPayload.value = rawJson;
-            form.appendChild(inputPayload);
-
-            const inputToken = document.createElement('input');
-            inputToken.type = 'hidden';
-            inputToken.name = 'token';
-            inputToken.value = apiToken;
-            form.appendChild(inputToken);
-
-            document.body.appendChild(iframe);
-            document.body.appendChild(form);
-            form.submit();
-
-            setTimeout(() => {
-              if (form.parentNode) form.parentNode.removeChild(form);
-              if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-              resolve();
-            }, 1800);
-          });
-          return { ok: true, formFallback: true, syncedAt: new Date().toISOString() };
-        } catch (noCorsErr) {
-          throw new Error('Gagal mengirim data ke Google Apps Script. Cek koneksi internet & URL /exec.');
-        }
+        return await gasFormIframePost(urlStr, fullPayload);
       }
     }
 
-    async function testGasConnection(urlInputId = null, tokenInputId = null) {
-      const cfg = getCleanGasConfig(urlInputId, tokenInputId);
+    async function testGasConnection(urlInputId, tokenInputId) {
+      const urlVal = sanitizeWebAppUrl(document.getElementById(urlInputId)?.value || (appData.sync && appData.sync.webAppUrl));
+      const tokenVal = (document.getElementById(tokenInputId)?.value || (appData.sync && appData.sync.apiToken) || '').trim();
       setSyncBusyState(true);
-      recordSyncResult('syncing', 'Menguji koneksi ke Google Apps Script...');
+      recordSyncResult('syncing', 'Menguji koneksi & API_TOKEN ke Google Apps Script...');
       try {
-        const pingRes = await gasGetRequest('ping', cfg);
-        const allRes = await gasGetRequest('all', cfg);
-        const counts = allRes && allRes.data
-          ? `Orders: ${(allRes.data.orders || []).length}, Katalog: ${(allRes.data.catalog || []).length}, Biaya: ${(allRes.data.expenses || []).length}`
-          : 'Sheet siap';
-        const msg = `Koneksi berhasil! (${pingRes.message || 'API Ready'} • ${counts})`;
-        recordSyncResult('success', msg, pingRes.timestamp);
-        showToast('Koneksi ke Google Sheets berhasil!');
-        return true;
+        const pingRes = await gasGetRequest('ping', {}, { webAppUrl: urlVal, apiToken: tokenVal });
+        const allRes = await gasGetRequest('all', {}, { webAppUrl: urlVal, apiToken: tokenVal });
+        const d = allRes.data || {};
+        const orderCount = Array.isArray(d.orders) ? d.orders.length : 0;
+        const catalogCount = Array.isArray(d.catalog) ? d.catalog.length : 0;
+        const expCount = Array.isArray(d.expenses) ? d.expenses.length : 0;
+        const msg = `Koneksi berhasil! (${pingRes.message || 'API ready'}). Terbaca di Google Sheets: ${orderCount} Orders, ${catalogCount} Katalog, ${expCount} Expenses.`;
+        recordSyncResult('success', msg, allRes.syncedAt || pingRes.timestamp);
+        showToast('Koneksi Google Sheets berhasil!');
       } catch (err) {
         recordSyncResult('error', `Tes koneksi gagal: ${err.message}`);
-        showToast(`Gagal: ${err.message}`);
-        return false;
+        showToast('Tes koneksi gagal!');
       } finally {
         setSyncBusyState(false);
       }
+    }
+
+    function mapOrderToSheetRow(o) {
+      const items = Array.isArray(o.items) ? o.items : [];
+      const subtotal = items.reduce((s, it) => s + (Number(it.qty) || 0) * (Number(it.price) || 0), 0);
+      const shippingCost = Number(o.shippingFee) || 0;
+      const totalAmount = subtotal + shippingCost;
+      const paidAmount = o.paymentStatus === 'Lunas' ? totalAmount : (o.paymentStatus === 'DP' ? (Number(o.dpAmount) || 0) : 0);
+      return {
+        id: o.id,
+        orderCode: o.orderCode,
+        customerName: o.customerName,
+        customerPhone: o.customerPhone || '',
+        channel: o.channel || 'WhatsApp',
+        deliveryMethod: o.deliveryMethod || 'Pick Up',
+        deliveryDate: o.deliveryDate || getTodayISO(),
+        items,
+        subtotal,
+        shippingCost,
+        totalAmount,
+        paidAmount,
+        paymentStatus: o.paymentStatus || 'Belum Bayar',
+        bankAccount: o.bankAccount || '',
+        notes: o.notes || '',
+        status: o.fulfillmentStatus || 'Antrean',
+        createdAt: o.createdAt || getTodayISO()
+      };
+    }
+
+    function mapSheetRowToOrder(row) {
+      let items = [];
+      if (Array.isArray(row.items)) {
+        items = row.items;
+      } else if (typeof row.itemsJson === 'string' && row.itemsJson.trim()) {
+        try { items = JSON.parse(row.itemsJson); } catch (_) { items = []; }
+      }
+      const shippingFee = Number(row.shippingCost ?? row.shippingFee ?? 0) || 0;
+      const paidAmount = Number(row.paidAmount ?? row.dpAmount ?? 0) || 0;
+      return {
+        id: String(row.id || 'ord-' + Date.now()),
+        orderCode: String(row.orderCode || 'PO-' + Math.floor(100 + Math.random() * 900)),
+        customerName: String(row.customerName || 'Pelanggan'),
+        customerPhone: String(row.customerPhone || ''),
+        deliveryDate: String(row.deliveryDate || getTodayISO()).slice(0, 10),
+        deliveryMethod: String(row.deliveryMethod || 'Pick Up'),
+        fulfillmentStatus: String(row.status || row.fulfillmentStatus || 'Antrean'),
+        items: items.map(it => ({
+          menuId: it.menuId || '',
+          name: String(it.name || 'Item Kue'),
+          qty: Number(it.qty) || 1,
+          price: Number(it.price) || 0
+        })),
+        shippingFee,
+        paymentStatus: String(row.paymentStatus || 'Belum Bayar'),
+        dpAmount: paidAmount,
+        notes: String(row.notes || ''),
+        createdAt: String(row.createdAt || getTodayISO()).slice(0, 10)
+      };
+    }
+
+    function mapMenuToSheetRow(m) {
+      return {
+        id: m.id,
+        name: m.name,
+        category: m.category || 'Kue Kering',
+        price: Number(m.price) || 0,
+        quota: Number(m.quota) || 0,
+        unit: m.unit || 'Box/Toples',
+        active: true
+      };
+    }
+
+    function mapSheetRowToMenu(row) {
+      return {
+        id: String(row.id || 'm-' + Date.now()),
+        name: String(row.name || 'Menu Kue'),
+        category: String(row.category || 'Kue Kering'),
+        price: Number(row.price) || 0,
+        quota: Number(row.quota) || 0
+      };
+    }
+
+    function mapExpenseToSheetRow(e) {
+      return {
+        id: e.id,
+        date: e.date || getTodayISO(),
+        category: e.category || 'Bahan Baku',
+        description: e.title || e.description || '',
+        amount: Number(e.amount) || 0,
+        paymentMethod: e.paymentMethod || 'Transfer/Cash',
+        notes: e.notes || ''
+      };
+    }
+
+    function mapSheetRowToExpense(row) {
+      return {
+        id: String(row.id || 'exp-' + Date.now()),
+        date: String(row.date || getTodayISO()).slice(0, 10),
+        category: String(row.category || 'Bahan Baku'),
+        title: String(row.description || row.title || 'Pengeluaran'),
+        amount: Number(row.amount) || 0
+      };
     }
 
     async function pullFromGoogleSheets(silent = false) {
@@ -1254,72 +1369,55 @@
         if (!silent) showToast('Isi URL /exec dan API_TOKEN dulu di pengaturan Sync.');
         return false;
       }
+      if (silent && appData.sync && appData.sync.pendingSync) {
+        await pushAllToGoogleSheets(true);
+        return false;
+      }
       setSyncBusyState(true);
       if (!silent) recordSyncResult('syncing', 'Mengambil data terbaru dari Google Sheets...');
       try {
-        const snapRes = await gasGetRequest('snapshot');
-        if (snapRes && snapRes.snapshot) {
-          const snap = snapRes.snapshot;
-          const hasRemoteContent =
-            (Array.isArray(snap.orders) && snap.orders.length > 0) ||
-            (Array.isArray(snap.menus) && snap.menus.length > 0) ||
-            (Array.isArray(snap.expenses) && snap.expenses.length > 0);
-          if (!silent || hasRemoteContent) {
-            if (snap.settings) appData.settings = Object.assign({}, appData.settings, snap.settings);
-            if (Array.isArray(snap.menus)) appData.menus = snap.menus;
-            if (Array.isArray(snap.orders)) appData.orders = snap.orders;
-            if (Array.isArray(snap.expenses)) appData.expenses = snap.expenses;
-          }
+        const res = await gasGetRequest('all');
+        const remote = res.data || {};
+        const snapshot = res.snapshot || null;
+
+        const remoteOrders = Array.isArray(remote.orders) ? remote.orders : [];
+        const remoteCatalog = Array.isArray(remote.catalog) ? remote.catalog : [];
+        const remoteExpenses = Array.isArray(remote.expenses) ? remote.expenses : [];
+        const hasRemoteRows = remoteOrders.length > 0 || remoteCatalog.length > 0 || remoteExpenses.length > 0;
+
+        if (snapshot && typeof snapshot === 'object' && !hasRemoteRows) {
+          if (snapshot.settings) appData.settings = Object.assign({}, appData.settings, snapshot.settings);
+          if (Array.isArray(snapshot.menus) && snapshot.menus.length > 0) appData.menus = snapshot.menus;
+          if (Array.isArray(snapshot.orders) && snapshot.orders.length > 0) appData.orders = snapshot.orders;
+          if (Array.isArray(snapshot.expenses) && snapshot.expenses.length > 0) appData.expenses = snapshot.expenses;
         } else {
-          const allRes = await gasGetRequest('all');
-          const d = allRes.data || {};
-          if (Array.isArray(d.catalog) && d.catalog.length > 0) {
-            appData.menus = d.catalog.map(c => ({
-              id: c.id,
-              name: c.name,
-              category: c.category || 'Umum',
-              price: Number(c.price) || 0,
-              quota: Number(c.quota) || 0
-            }));
+          if (snapshot && snapshot.settings) {
+            appData.settings = Object.assign({}, appData.settings, snapshot.settings);
           }
-          if (Array.isArray(d.orders) && d.orders.length > 0) {
-            appData.orders = d.orders.map(o => ({
-              id: o.id,
-              orderCode: o.orderCode || o.id,
-              customerName: o.customerName || '',
-              customerPhone: o.customerPhone || '',
-              deliveryMethod: o.deliveryMethod || 'Pick Up',
-              deliveryDate: o.deliveryDate || getTodayISO(),
-              items: Array.isArray(o.items) ? o.items : [],
-              shippingFee: Number(o.shippingCost) || 0,
-              paymentStatus: o.paymentStatus || 'Belum Bayar',
-              dpAmount: Number(o.paidAmount) || 0,
-              notes: o.notes || '',
-              fulfillmentStatus: o.status || 'Antrean',
-              createdAt: o.createdAt || getTodayISO()
-            }));
+          if (remoteOrders.length > 0) {
+            appData.orders = remoteOrders.map(mapSheetRowToOrder);
           }
-          if (Array.isArray(d.expenses) && d.expenses.length > 0) {
-            appData.expenses = d.expenses.map(ex => ({
-              id: ex.id,
-              date: ex.date || getTodayISO(),
-              category: ex.category || 'Bahan Baku',
-              title: ex.description || '',
-              amount: Number(ex.amount) || 0
-            }));
+          if (remoteCatalog.length > 0) {
+            appData.menus = remoteCatalog.map(mapSheetRowToMenu);
+          }
+          if (remoteExpenses.length > 0) {
+            appData.expenses = remoteExpenses.map(mapSheetRowToExpense);
           }
         }
+
+        if (!appData.sync) appData.sync = {};
+        appData.sync.pendingSync = false;
         saveData({ skipAutoSync: true });
         updateBrandTitles();
         renderDashboard();
         renderOrders();
         renderMenus();
         renderExpenses();
-        renderSettings();
+        populateSettingsForm();
 
-        const msg = `Data berhasil ditarik dari Google Sheets (Orders: ${appData.orders.length}, Katalog: ${appData.menus.length}, Biaya: ${appData.expenses.length}).`;
-        recordSyncResult('success', msg, snapRes.updatedAt || new Date().toISOString());
-        if (!silent) showToast('Data terbaru berhasil ditarik dari Sheets!');
+        const msg = `Tarik data selesai: ${appData.orders.length} Orders, ${appData.menus.length} Menu, ${appData.expenses.length} Biaya.`;
+        recordSyncResult('success', msg, res.syncedAt || new Date().toISOString());
+        if (!silent) showToast('Data terbaru berhasil ditarik dari Google Sheets!');
         return true;
       } catch (err) {
         recordSyncResult('error', `Gagal tarik data: ${err.message}`);
@@ -1330,75 +1428,19 @@
       }
     }
 
-    function buildSyncPayloadFromAppData() {
-      const catalogRows = (appData.menus || []).map(m => ({
-        id: m.id,
-        name: m.name,
-        category: m.category || 'Umum',
-        price: Number(m.price) || 0,
-        quota: Number(m.quota) || 0,
-        sold: 0,
-        isActive: true,
-        updatedAt: new Date().toISOString()
-      }));
-
-      const orderRows = (appData.orders || []).map(o => {
-        const subtotal = getOrderSubtotal(o);
-        const shippingCost = Number(o.shippingFee) || 0;
-        const totalAmount = subtotal + shippingCost;
-        const paidAmount = o.paymentStatus === 'Lunas'
-          ? totalAmount
-          : o.paymentStatus === 'DP'
-          ? (Number(o.dpAmount) || 0)
-          : 0;
-        return {
-          id: o.id,
-          orderCode: o.orderCode || o.id,
-          customerName: o.customerName,
-          channel: 'WhatsApp',
-          deliveryMethod: o.deliveryMethod || 'Pick Up',
-          deliveryDate: o.deliveryDate,
-          items: o.items || [],
-          itemsJson: JSON.stringify(o.items || []),
-          subtotal: subtotal,
-          shippingCost: shippingCost,
-          totalAmount: totalAmount,
-          paidAmount: paidAmount,
-          paymentStatus: o.paymentStatus || 'Belum Bayar',
-          bankAccount: '',
-          notes: o.notes || '',
-          status: o.fulfillmentStatus || 'Antrean',
-          createdAt: o.createdAt || getTodayISO(),
-          updatedAt: new Date().toISOString()
-        };
-      });
-
-      const expenseRows = (appData.expenses || []).map(e => ({
-        id: e.id,
-        date: e.date,
-        category: e.category || 'Bahan Baku',
-        description: e.title,
-        amount: Number(e.amount) || 0,
-        paymentMethod: 'Transfer/Kas',
-        createdAt: e.createdAt || e.date || getTodayISO()
-      }));
-
-      return {
-        orders: orderRows,
-        catalog: catalogRows,
-        expenses: expenseRows
-      };
-    }
-
     async function pushAllToGoogleSheets(silent = false) {
       if (!hasGasConfig()) {
         if (!silent) showToast('Isi URL /exec dan API_TOKEN dulu di pengaturan Sync.');
         return false;
       }
       setSyncBusyState(true);
-      if (!silent) recordSyncResult('syncing', 'Mengirim data PO, katalog, dan pengeluaran ke Google Sheets...');
+      if (!silent) recordSyncResult('syncing', 'Mengirim seluruh data ke Google Sheets...');
       try {
-        const dataPayload = buildSyncPayloadFromAppData();
+        const dataPayload = {
+          orders: appData.orders.map(mapOrderToSheetRow),
+          catalog: appData.menus.map(mapMenuToSheetRow),
+          expenses: appData.expenses.map(mapExpenseToSheetRow)
+        };
         const snapshotPayload = {
           settings: appData.settings,
           menus: appData.menus,
@@ -1410,70 +1452,61 @@
           data: dataPayload,
           snapshot: snapshotPayload
         });
+        if (!appData.sync) appData.sync = {};
+        appData.sync.pendingSync = false;
         const msg = `Berhasil kirim ke Sheets (Orders: ${dataPayload.orders.length}, Katalog: ${dataPayload.catalog.length}, Biaya: ${dataPayload.expenses.length}).`;
         recordSyncResult('success', msg, res.syncedAt);
         if (!silent) showToast('Data berhasil disinkronkan ke Google Sheets!');
         return true;
       } catch (err) {
-        recordSyncResult('error', `Gagal kirim data: ${err.message}`);
-        if (!silent) showToast(`Gagal sync: ${err.message}`);
+        recordSyncResult('error', `Gagal kirim ke Sheets: ${err.message}`);
+        if (!silent) showToast(`Gagal kirim data: ${err.message}`);
         return false;
       } finally {
         setSyncBusyState(false);
       }
     }
 
-    window.saveSyncFieldsFromModal = saveSyncFieldsFromModal;
-    window.handleSaveSyncConfig = handleSaveSyncConfig;
-    window.toggleTokenVisibility = toggleTokenVisibility;
-    window.testGasConnection = testGasConnection;
-    window.pullFromGoogleSheets = pullFromGoogleSheets;
-    window.pushAllToGoogleSheets = pushAllToGoogleSheets;
-
-    let autoSyncTimer = null;
-    let isSyncInProgress = false;
-
-    function isUserEditingModal() {
-      const modals = ['orderModal', 'menuModal', 'syncModal'];
-      return modals.some(id => {
-        const el = document.getElementById(id);
-        return el && !el.classList.contains('hidden');
-      });
-    }
-
     function triggerAutoSync(action, payload) {
       if (autoSyncTimer) clearTimeout(autoSyncTimer);
       autoSyncTimer = setTimeout(async () => {
+        autoSyncTimer = null;
         if (!hasGasConfig()) return;
+        if (isSyncInProgress) return;
         isSyncInProgress = true;
         setSyncBusyState(true);
         try {
-          if (action === 'upsertOrder' && payload) {
-            await gasPostRequest({ action: 'upsertOrder', order: payload });
-            await pushAllToGoogleSheets(true);
-          } else if (action === 'upsertCatalogItem' && payload) {
-            await gasPostRequest({ action: 'upsertCatalogItem', item: payload });
-            await pushAllToGoogleSheets(true);
-          } else if (action === 'upsertExpense' && payload) {
-            await gasPostRequest({ action: 'upsertExpense', expense: payload });
-            await pushAllToGoogleSheets(true);
-          } else {
-            await pushAllToGoogleSheets(true);
-          }
+          await pushAllToGoogleSheets(true);
         } catch (err) {
           recordSyncResult('error', `Auto-sync tertunda: ${err.message}`);
         } finally {
           isSyncInProgress = false;
           setSyncBusyState(false);
         }
-      }, 400);
+      }, 50);
+    }
+
+    function isUserEditingModal() {
+      const modalIds = ['orderModal', 'menuModal', 'syncModal'];
+      return modalIds.some(id => {
+        const el = document.getElementById(id);
+        return el && !el.classList.contains('hidden');
+      });
     }
 
     async function runAutoPullIfEnabled() {
       if (!hasGasConfig()) return;
       if (appData.sync && appData.sync.autoSync === false) return;
       if (isSyncInProgress || autoSyncTimer || isUserEditingModal()) return;
-      // Jangan timpa data lokal dengan auto-pull jika baru saja ada perubahan dalam 15 detik terakhir
+      if (appData.sync && appData.sync.pendingSync) {
+        isSyncInProgress = true;
+        try {
+          await pushAllToGoogleSheets(true);
+        } finally {
+          isSyncInProgress = false;
+        }
+        return;
+      }
       if (Date.now() - lastLocalMutationAt < 15000) return;
       isSyncInProgress = true;
       try {
@@ -1483,23 +1516,16 @@
       }
     }
 
-    function fallbackCopyText(text, successMsg) {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.position = 'fixed';
-      ta.style.left = '-9999px';
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      try {
-        document.execCommand('copy');
-        showToast(successMsg);
-      } catch (err) {
-        showToast('Gagal menyalin teks.');
-      }
-      document.body.removeChild(ta);
-    }
+    window.saveSyncFieldsFromModal = saveSyncFieldsFromModal;
+    window.handleSaveSyncConfig = handleSaveSyncConfig;
+    window.testGasConnection = testGasConnection;
+    window.pullFromGoogleSheets = pullFromGoogleSheets;
+    window.pushAllToGoogleSheets = pushAllToGoogleSheets;
+    window.toggleTokenVisibility = toggleTokenVisibility;
 
+    // =========================================================================
+    // 3. FORMATTING & CALCULATION HELPERS
+    // =========================================================================
     function formatRupiah(amount) {
       const num = Number(amount) || 0;
       return 'Rp ' + num.toLocaleString('id-ID');
@@ -1507,27 +1533,26 @@
 
     function formatDateIndo(isoDate) {
       if (!isoDate) return '-';
-      const parts = String(isoDate).split('T')[0].split('-');
+      const parts = isoDate.split('-');
       if (parts.length !== 3) return isoDate;
       const months = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-      const monthIdx = parseInt(parts[1], 10) - 1;
-      return `${parseInt(parts[2], 10)} ${months[monthIdx] || parts[1]} ${parts[0]}`;
+      const day = parseInt(parts[2], 10);
+      const monthName = months[parseInt(parts[1], 10) - 1] || parts[1];
+      return `${day} ${monthName} ${parts[0]}`;
     }
 
     function getOrderSubtotal(order) {
-      if (!order || !Array.isArray(order.items)) return 0;
-      return order.items.reduce((sum, item) => sum + ((Number(item.qty) || 0) * (Number(item.price) || 0)), 0);
+      return (order.items || []).reduce((sum, item) => sum + ((Number(item.qty) || 0) * (Number(item.price) || 0)), 0);
     }
 
     function getOrderTotal(order) {
-      return getOrderSubtotal(order) + (Number(order && order.shippingFee) || 0);
+      return getOrderSubtotal(order) + (Number(order.shippingFee) || 0);
     }
 
     function getOrderPaid(order) {
-      if (!order) return 0;
       const total = getOrderTotal(order);
       if (order.paymentStatus === 'Lunas') return total;
-      if (order.paymentStatus === 'DP') return Math.min(total, Number(order.dpAmount) || 0);
+      if (order.paymentStatus === 'DP') return Math.min(Number(order.dpAmount) || 0, total);
       return 0;
     }
 
@@ -1535,196 +1560,191 @@
       return Math.max(0, getOrderTotal(order) - getOrderPaid(order));
     }
 
-    let toastTimer = null;
-    function showToast(message) {
-      const el = document.getElementById('toast');
-      if (!el) return;
-      el.textContent = message;
-      el.classList.remove('hidden');
-      if (toastTimer) clearTimeout(toastTimer);
-      toastTimer = setTimeout(() => {
-        el.classList.add('hidden');
-      }, 2800);
+    function showToast(msg) {
+      const toast = document.getElementById('toast');
+      if (!toast) return;
+      toast.textContent = msg;
+      toast.classList.remove('hidden');
+      clearTimeout(window._toastTimer);
+      window._toastTimer = setTimeout(() => {
+        toast.classList.add('hidden');
+      }, 2600);
     }
 
     function copyTextToClipboard(text, successMsg = 'Teks berhasil disalin!') {
-      fallbackCopyText(text, successMsg);
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.style.position = 'fixed';
+      textarea.style.opacity = '0';
+      document.body.appendChild(textarea);
+      textarea.select();
+      try {
+        document.execCommand('copy');
+        showToast(successMsg);
+      } catch (err) {
+        showToast('Gagal menyalin teks.');
+      }
+      document.body.removeChild(textarea);
     }
-
-    function openConfirmDialog(title, message, onConfirm) {
-      document.getElementById('confirmModalTitle').textContent = title;
-      document.getElementById('confirmModalMessage').textContent = message;
-      confirmCallback = onConfirm;
-      document.getElementById('confirmModal').classList.remove('hidden');
-    }
-
-    function closeConfirmDialog() {
-      document.getElementById('confirmModal').classList.add('hidden');
-      confirmCallback = null;
-    }
-
-    document.getElementById('confirmModalActionBtn').addEventListener('click', () => {
-      if (typeof confirmCallback === 'function') confirmCallback();
-      closeConfirmDialog();
-    });
 
     // =========================================================================
-    // 3. NAVIGATION & TAB SWITCHING
+    // 4. NAVIGATION & TAB SWITCHING
     // =========================================================================
     const TAB_META = {
-      dashboard: { title: 'Ringkasan & Produksi', subtitle: 'Rekap jumlah kue dipanggang, piutang DP, dan laba bersih PO' },
-      orders: { title: 'Daftar Pesanan PO', subtitle: 'Kelola status pembayaran, pengiriman, dan kirim nota WA' },
-      catalog: { title: 'Katalog & Kuota PO', subtitle: 'Atur harga jual dan batas kuota per kloter produksi' },
+      dashboard: { title: 'Ringkasan & Produksi', subtitle: 'Jadwal panggang harian, sisa piutang DP, dan estimasi laba PO' },
+      orders: { title: 'Daftar Pesanan PO', subtitle: 'Kelola pesanan masuk, status panggang, dan pelunasan pelanggan' },
+      catalog: { title: 'Katalog Kue & Kuota', subtitle: 'Atur daftar menu, harga jual, dan batas kuota per kloter' },
       expenses: { title: 'Belanja Bahan & Biaya', subtitle: 'Catat pengeluaran bahan baku, kemasan, dan operasional' },
-      settings: { title: 'Pengaturan & Sync', subtitle: 'Sinkronisasi Google Sheets, profil toko, dan backup JSON' }
+      settings: { title: 'Pengaturan & Sync', subtitle: 'Sinkronisasi Google Sheets, profil dapur, rekening, dan backup' }
     };
 
-    function switchTab(tabName) {
-      currentTab = tabName;
-      document.querySelectorAll('.tab-section').forEach(sec => sec.classList.add('hidden'));
-      const activeSec = document.getElementById('tab-' + tabName);
-      if (activeSec) activeSec.classList.remove('hidden');
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-section').forEach(el => el.classList.add('hidden'));
+      const target = document.getElementById(`tab-${tabId}`);
+      if (target) target.classList.remove('hidden');
+
+      const meta = TAB_META[tabId] || TAB_META.dashboard;
+      document.getElementById('headerTitle').textContent = meta.title;
+      document.getElementById('headerSubtitle').textContent = meta.subtitle;
 
       document.querySelectorAll('.nav-btn').forEach(btn => {
-        const isMatch = btn.dataset.nav === tabName;
-        btn.className = isMatch
+        const isActive = btn.getAttribute('data-nav') === tabId;
+        btn.className = isActive
           ? 'nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all bg-terracotta text-white shadow-sm'
           : 'nav-btn w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium text-cream/80 hover:bg-cream/10 transition-all';
       });
 
       document.querySelectorAll('.mob-nav-btn').forEach(btn => {
-        const isMatch = btn.dataset.nav === tabName;
-        btn.className = isMatch
+        const isActive = btn.getAttribute('data-nav') === tabId;
+        btn.className = isActive
           ? 'mob-nav-btn flex flex-col items-center gap-1 py-1 px-2 text-terracotta font-bold text-[11px]'
           : 'mob-nav-btn flex flex-col items-center gap-1 py-1 px-2 text-espresso/60 font-medium text-[11px]';
       });
 
-      document.getElementById('headerTitle').textContent = TAB_META[tabName].title;
-      document.getElementById('headerSubtitle').textContent = TAB_META[tabName].subtitle;
-
-      if (tabName === 'dashboard') renderDashboard();
-      if (tabName === 'orders') renderOrders();
-      if (tabName === 'catalog') renderMenus();
-      if (tabName === 'expenses') renderExpenses();
-      if (tabName === 'settings') renderSettings();
+      if (tabId === 'dashboard') renderDashboard();
+      if (tabId === 'orders') renderOrders();
+      if (tabId === 'catalog') renderMenus();
+      if (tabId === 'expenses') renderExpenses();
+      if (tabId === 'settings') populateSettingsForm();
 
       refreshIcons();
     }
 
     // =========================================================================
-    // 4. DASHBOARD & BAKING LIST RENDERING
+    // 5. DASHBOARD & BAKING LIST LOGIC
     // =========================================================================
     function setBakingDateAll() {
       document.getElementById('bakingDateFilter').value = '';
       renderDashboard();
     }
 
-    function getFilteredBakingOrders() {
-      const selectedDate = document.getElementById('bakingDateFilter').value;
-      return appData.orders.filter(o => {
-        if (o.fulfillmentStatus === 'Selesai') return false;
-        if (selectedDate && o.deliveryDate !== selectedDate) return false;
-        return true;
+    function getAggregatedBakingItems(dateFilter) {
+      const map = {};
+      appData.orders.forEach(order => {
+        if (order.fulfillmentStatus === 'Selesai') return;
+        if (dateFilter && order.deliveryDate !== dateFilter) return;
+        (order.items || []).forEach(item => {
+          const key = item.name.trim();
+          if (!map[key]) {
+            map[key] = { name: key, totalQty: 0, orderCount: 0, details: [] };
+          }
+          map[key].totalQty += Number(item.qty) || 0;
+          map[key].orderCount += 1;
+          map[key].details.push(`${order.customerName} (${item.qty})`);
+        });
       });
+      return Object.values(map).sort((a, b) => b.totalQty - a.totalQty);
     }
 
     function renderDashboard() {
-      const totalRevenue = appData.orders.reduce((sum, o) => sum + getOrderTotal(o), 0);
-      const totalUnpaid = appData.orders.reduce((sum, o) => sum + getOrderRemaining(o), 0);
-      const unpaidOrdersCount = appData.orders.filter(o => getOrderRemaining(o) > 0).length;
-      const totalExpense = appData.expenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+      let totalRevenue = 0;
+      let totalUnpaid = 0;
+      let unpaidCount = 0;
+
+      appData.orders.forEach(order => {
+        totalRevenue += getOrderTotal(order);
+        const rem = getOrderRemaining(order);
+        if (rem > 0) {
+          totalUnpaid += rem;
+          unpaidCount += 1;
+        }
+      });
+
+      const totalExpense = appData.expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
       const netProfit = totalRevenue - totalExpense;
 
       document.getElementById('kpiRevenue').textContent = formatRupiah(totalRevenue);
-      document.getElementById('kpiOrderCount').textContent = `${appData.orders.length} total pesanan`;
+      document.getElementById('kpiOrderCount').textContent = `${appData.orders.length} pesanan tercatat`;
       document.getElementById('kpiUnpaid').textContent = formatRupiah(totalUnpaid);
-      document.getElementById('kpiUnpaidCount').textContent = `${unpaidOrdersCount} order belum lunas`;
+      document.getElementById('kpiUnpaidCount').textContent = `${unpaidCount} order belum lunas`;
       document.getElementById('kpiExpense').textContent = formatRupiah(totalExpense);
       document.getElementById('kpiExpenseCount').textContent = `${appData.expenses.length} catatan belanja`;
       document.getElementById('kpiNetProfit').textContent = formatRupiah(netProfit);
 
-      const bakingOrders = getFilteredBakingOrders();
-      const itemSummaryMap = {};
+      const dateFilter = document.getElementById('bakingDateFilter').value;
+      const btnAll = document.getElementById('btnBakingAll');
+      btnAll.className = !dateFilter
+        ? 'px-3 py-2 rounded-xl bg-espresso text-cream text-xs font-bold transition'
+        : 'px-3 py-2 rounded-xl bg-creamDark hover:bg-espresso/10 text-espresso text-xs font-semibold transition';
 
-      bakingOrders.forEach(order => {
-        (order.items || []).forEach(item => {
-          const key = item.name.trim();
-          if (!itemSummaryMap[key]) {
-            itemSummaryMap[key] = { name: key, totalQty: 0, orderCount: 0, statusBreakdown: { Antrean: 0, Dipanggang: 0, 'Siap Kirim': 0 } };
-          }
-          const q = Number(item.qty) || 0;
-          itemSummaryMap[key].totalQty += q;
-          itemSummaryMap[key].orderCount += 1;
-          if (itemSummaryMap[key].statusBreakdown[order.fulfillmentStatus] !== undefined) {
-            itemSummaryMap[key].statusBreakdown[order.fulfillmentStatus] += q;
-          }
-        });
-      });
-
-      const bakingItems = Object.values(itemSummaryMap).sort((a, b) => b.totalQty - a.totalQty);
+      const bakingItems = getAggregatedBakingItems(dateFilter);
       const bakingContainer = document.getElementById('bakingListContainer');
 
       if (bakingItems.length === 0) {
         bakingContainer.innerHTML = `
-          <div class="text-center py-8 text-espresso/55">
-            <p class="text-sm font-semibold">Tidak ada jadwal kue yang perlu diproduksi pada filter tanggal ini.</p>
-            <p class="text-xs mt-1">Pilih "Semua Tanggal" atau catat pesanan PO baru.</p>
+          <div class="text-center py-8 px-4 bg-cream/60 rounded-2xl border border-dashed border-espresso/15">
+            <p class="font-serif text-base font-bold text-espresso">Tidak ada antrean panggang ${dateFilter ? 'pada ' + formatDateIndo(dateFilter) : 'aktif'}</p>
+            <p class="text-xs text-espresso/60 mt-1">Pilih "Semua Tanggal" atau catat pesanan PO baru untuk melihat rekap produksi otomatis.</p>
           </div>
         `;
       } else {
         bakingContainer.innerHTML = `
-          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             ${bakingItems.map(item => `
-              <div class="p-4 rounded-2xl bg-cream border border-espresso/10 flex flex-col justify-between gap-3">
+              <div class="p-4 rounded-2xl bg-cream border border-espresso/10 flex flex-col justify-between gap-2">
                 <div class="flex items-start justify-between gap-2">
-                  <div>
-                    <h4 class="font-bold text-sm text-espresso leading-snug">${item.name}</h4>
-                    <p class="text-[11px] text-espresso/60 mt-0.5">Dari ${item.orderCount} pesanan</p>
-                  </div>
-                  <div class="px-3 py-1.5 rounded-xl bg-espresso text-cream text-right shrink-0">
-                    <span class="font-serif text-lg font-bold tabular-nums">${item.totalQty}</span>
-                    <span class="text-[10px] block text-cream/75 leading-none">pcs/box</span>
-                  </div>
+                  <p class="font-bold text-sm text-espresso leading-snug">${item.name}</p>
+                  <span class="px-2.5 py-1 rounded-xl bg-terracotta text-white text-xs font-extrabold tabular-nums shrink-0">${item.totalQty} pcs</span>
                 </div>
-                <div class="flex flex-wrap gap-1.5 text-[11px]">
-                  ${item.statusBreakdown['Antrean'] > 0 ? `<span class="px-2 py-0.5 rounded-md bg-amberBg text-amber-900 font-semibold">Antrean: ${item.statusBreakdown['Antrean']}</span>` : ''}
-                  ${item.statusBreakdown['Dipanggang'] > 0 ? `<span class="px-2 py-0.5 rounded-md bg-terracotta/15 text-terracotta font-semibold">Dipanggang: ${item.statusBreakdown['Dipanggang']}</span>` : ''}
-                  ${item.statusBreakdown['Siap Kirim'] > 0 ? `<span class="px-2 py-0.5 rounded-md bg-sageBg text-sage font-semibold">Siap Kirim: ${item.statusBreakdown['Siap Kirim']}</span>` : ''}
-                </div>
+                <p class="text-[11px] text-espresso/65 leading-relaxed">Pemesan: ${item.details.join(', ')}</p>
               </div>
             `).join('')}
           </div>
         `;
       }
 
-      const upcomingOrders = [...appData.orders]
+      const upcomingContainer = document.getElementById('upcomingOrdersContainer');
+      const sortedOrders = [...appData.orders]
         .filter(o => o.fulfillmentStatus !== 'Selesai' || getOrderRemaining(o) > 0)
         .sort((a, b) => (a.deliveryDate || '').localeCompare(b.deliveryDate || ''))
         .slice(0, 5);
 
-      const upcomingContainer = document.getElementById('upcomingOrdersContainer');
-      if (upcomingOrders.length === 0) {
-        upcomingContainer.innerHTML = `<p class="p-5 text-xs text-espresso/55 text-center">Semua pesanan sudah selesai dan lunas!</p>`;
+      if (sortedOrders.length === 0) {
+        upcomingContainer.innerHTML = `<div class="p-6 text-center text-xs text-espresso/60">Semua pesanan sudah selesai dan lunas!</div>`;
       } else {
-        upcomingContainer.innerHTML = upcomingOrders.map(o => {
-          const rem = getOrderRemaining(o);
+        upcomingContainer.innerHTML = sortedOrders.map(order => {
+          const rem = getOrderRemaining(order);
+          const itemSummary = order.items.map(i => `${i.qty}x ${i.name}`).join(', ');
           return `
-            <div class="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-cream/50 transition">
-              <div>
-                <div class="flex items-center gap-2">
-                  <span class="text-xs font-bold text-terracotta">${o.orderCode}</span>
-                  <span class="font-bold text-sm text-espresso">${o.customerName}</span>
-                  <span class="text-[11px] px-2 py-0.5 rounded-full bg-creamDark text-espresso/80 font-medium">${formatDateIndo(o.deliveryDate)}</span>
+            <div class="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-cream/40 transition">
+              <div class="space-y-1">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-xs font-bold text-terracotta">${order.orderCode}</span>
+                  <span class="font-bold text-sm text-espresso">${order.customerName}</span>
+                  <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-creamDark text-espresso">${formatDateIndo(order.deliveryDate)}</span>
+                  <span class="px-2 py-0.5 rounded-full text-[11px] font-semibold ${getStatusBadgeClass(order.fulfillmentStatus)}">${order.fulfillmentStatus}</span>
                 </div>
-                <p class="text-xs text-espresso/65 mt-0.5">${(o.items || []).map(i => `${i.qty}x ${i.name}`).join(', ')}</p>
+                <p class="text-xs text-espresso/70 line-clamp-1">${itemSummary}</p>
               </div>
-              <div class="flex items-center gap-2 self-end sm:self-center">
-                ${rem > 0
-                  ? `<span class="px-2.5 py-1 rounded-lg bg-amberBg text-amber-900 text-xs font-bold tabular-nums">Kurang ${formatRupiah(rem)}</span>`
-                  : `<span class="px-2.5 py-1 rounded-lg bg-sageBg text-sage text-xs font-bold">Lunas</span>`
-                }
-                <button onclick="openReceiptModal('${o.id}')" class="p-2 rounded-lg bg-creamDark hover:bg-espresso hover:text-white text-espresso transition" title="Lihat Nota WA">
-                  <i data-lucide="file-text" class="w-4 h-4"></i>
+              <div class="flex items-center justify-between sm:justify-end gap-3">
+                <div class="text-left sm:text-right">
+                  <p class="text-xs font-bold text-espresso tabular-nums">${formatRupiah(getOrderTotal(order))}</p>
+                  ${rem > 0
+                    ? `<p class="text-[11px] font-semibold text-amber-700 tabular-nums">Kurang ${formatRupiah(rem)}</p>`
+                    : `<p class="text-[11px] font-semibold text-sage">Lunas</p>`}
+                </div>
+                <button onclick="openReceiptModal('${order.id}')" class="px-3 py-1.5 rounded-xl bg-creamDark hover:bg-espresso hover:text-white text-xs font-semibold transition">
+                  Nota WA
                 </button>
               </div>
             </div>
@@ -1735,43 +1755,37 @@
     }
 
     function copyBakingListText() {
-      const selectedDate = document.getElementById('bakingDateFilter').value;
-      const bakingOrders = getFilteredBakingOrders();
-      if (bakingOrders.length === 0) {
-        showToast('Tidak ada data produksi untuk disalin.');
+      const dateFilter = document.getElementById('bakingDateFilter').value;
+      const items = getAggregatedBakingItems(dateFilter);
+      if (items.length === 0) {
+        showToast('Tidak ada daftar produksi untuk disalin.');
         return;
       }
-
-      const map = {};
-      bakingOrders.forEach(o => {
-        (o.items || []).forEach(i => {
-          map[i.name] = (map[i.name] || 0) + (Number(i.qty) || 0);
-        });
+      const headerDate = dateFilter ? formatDateIndo(dateFilter) : 'Semua Jadwal Aktif';
+      let text = `*REKAP PRODUKSI / BAKING LIST*\n*${appData.settings.bakeryName}*\nJadwal: ${headerDate}\n----------------------------\n`;
+      items.forEach((it, idx) => {
+        text += `${idx + 1}. *${it.name}* — *${it.totalQty} pcs*\n   (${it.details.join(', ')})\n`;
       });
-
-      const dateLabel = selectedDate ? formatDateIndo(selectedDate) : 'Semua Jadwal Aktif';
-      let lines = [
-        `*REKAP PRODUKSI DAPUR (${appData.settings.bakeryName.toUpperCase()})*`,
-        `Jadwal Kirim: ${dateLabel}`,
-        `Total Pesanan: ${bakingOrders.length} order`,
-        `--------------------------------`
-      ];
-      Object.entries(map).forEach(([name, qty], idx) => {
-        lines.push(`${idx + 1}. ${name} : *${qty} pcs/box*`);
-      });
-      lines.push(`--------------------------------`);
-      lines.push(`Semangat baking!`);
-
-      copyTextToClipboard(lines.join('\n'), 'Rekap produksi dapur disalin!');
+      copyTextToClipboard(text, 'Rekap dapur berhasil disalin!');
     }
 
     // =========================================================================
-    // 5. ORDERS MANAGEMENT & WHATSAPP RECEIPT
+    // 6. ORDERS MANAGEMENT & MODAL
     // =========================================================================
+    function getStatusBadgeClass(status) {
+      switch (status) {
+        case 'Antrean': return 'bg-amber-100 text-amber-800';
+        case 'Dipanggang': return 'bg-orange-100 text-orange-800';
+        case 'Siap Kirim': return 'bg-sky-100 text-sky-800';
+        case 'Selesai': return 'bg-sageBg text-sage';
+        default: return 'bg-creamDark text-espresso';
+      }
+    }
+
     function setOrderStatusFilter(status) {
-      orderStatusFilter = status;
+      currentOrderStatusFilter = status;
       document.querySelectorAll('.status-chip').forEach(btn => {
-        const active = btn.dataset.statusFilter === status;
+        const active = btn.getAttribute('data-status-filter') === status;
         btn.className = active
           ? 'status-chip px-3.5 py-1.5 rounded-full text-xs font-bold bg-espresso text-cream whitespace-nowrap'
           : 'status-chip px-3.5 py-1.5 rounded-full text-xs font-semibold bg-creamDark text-espresso/75 hover:bg-espresso/10 whitespace-nowrap';
@@ -1786,39 +1800,37 @@
     }
 
     function renderOrders() {
-      const q = document.getElementById('orderSearchInput').value.toLowerCase().trim();
-      const dateF = document.getElementById('orderDateFilter').value;
+      const query = (document.getElementById('orderSearchInput').value || '').toLowerCase().trim();
+      const dateFilter = document.getElementById('orderDateFilter').value;
 
-      const filtered = appData.orders.filter(o => {
-        if (dateF && o.deliveryDate !== dateF) return false;
-        if (orderStatusFilter === 'UNPAID' && getOrderRemaining(o) <= 0) return false;
-        if (orderStatusFilter !== 'ALL' && orderStatusFilter !== 'UNPAID' && o.fulfillmentStatus !== orderStatusFilter) return false;
-        if (q) {
-          const hay = `${o.orderCode} ${o.customerName} ${o.customerPhone} ${(o.items || []).map(i => i.name).join(' ')}`.toLowerCase();
-          if (!hay.includes(q)) return false;
-        }
-        return true;
-      }).sort((a, b) => (a.deliveryDate || '').localeCompare(b.deliveryDate || ''));
+      const filtered = appData.orders
+        .filter(o => {
+          if (dateFilter && o.deliveryDate !== dateFilter) return false;
+          if (currentOrderStatusFilter === 'UNPAID' && getOrderRemaining(o) <= 0) return false;
+          if (currentOrderStatusFilter !== 'ALL' && currentOrderStatusFilter !== 'UNPAID' && o.fulfillmentStatus !== currentOrderStatusFilter) return false;
+          if (query) {
+            const hay = `${o.orderCode} ${o.customerName} ${o.customerPhone} ${(o.items || []).map(i => i.name).join(' ')}`.toLowerCase();
+            if (!hay.includes(query)) return false;
+          }
+          return true;
+        })
+        .sort((a, b) => (a.deliveryDate || '').localeCompare(b.deliveryDate || ''));
 
       const container = document.getElementById('ordersListContainer');
       if (filtered.length === 0) {
         container.innerHTML = `
-          <div class="col-span-full bg-white p-10 rounded-2xl border border-espresso/10 text-center space-y-2">
-            <p class="font-serif text-base font-bold text-espresso">Belum ada pesanan PO yang cocok</p>
-            <p class="text-xs text-espresso/60">Klik tombol "+ Catat PO" di kanan atas untuk mencatat pesanan baru.</p>
+          <div class="col-span-full bg-white p-8 rounded-2xl border border-dashed border-espresso/15 text-center space-y-2">
+            <p class="font-serif text-base font-bold text-espresso">Belum ada pesanan PO yang sesuai filter</p>
+            <p class="text-xs text-espresso/60">Klik tombol <b>+ Catat PO</b> di kanan atas untuk mencatat order baru.</p>
           </div>
         `;
         return;
       }
 
-      container.innerHTML = filtered.map(o => {
-        const total = getOrderTotal(o);
-        const remaining = getOrderRemaining(o);
-        const payBadge = o.paymentStatus === 'Lunas'
-          ? `<span class="px-2.5 py-0.5 rounded-full bg-sageBg text-sage text-[11px] font-bold">Lunas</span>`
-          : o.paymentStatus === 'DP'
-          ? `<span class="px-2.5 py-0.5 rounded-full bg-amberBg text-amber-900 text-[11px] font-bold">DP (${formatRupiah(o.dpAmount)})</span>`
-          : `<span class="px-2.5 py-0.5 rounded-full bg-red-100 text-red-700 text-[11px] font-bold">Belum Bayar</span>`;
+      container.innerHTML = filtered.map(order => {
+        const total = getOrderTotal(order);
+        const paid = getOrderPaid(order);
+        const rem = getOrderRemaining(order);
 
         return `
           <div class="bg-white rounded-2xl border border-espresso/10 shadow-2xs p-4 md:p-5 flex flex-col justify-between gap-4">
@@ -1826,58 +1838,68 @@
               <div class="flex items-start justify-between gap-2">
                 <div>
                   <div class="flex items-center gap-2">
-                    <span class="text-xs font-bold text-terracotta">${o.orderCode}</span>
-                    ${payBadge}
+                    <span class="text-xs font-extrabold text-terracotta tracking-wide">${order.orderCode}</span>
+                    <span class="text-xs text-espresso/40">•</span>
+                    <span class="text-xs font-semibold text-espresso/75">${formatDateIndo(order.deliveryDate)}</span>
                   </div>
-                  <h4 class="font-bold text-base text-espresso mt-0.5">${o.customerName}</h4>
-                  <p class="text-xs text-espresso/60">Kirim: <strong class="text-espresso">${formatDateIndo(o.deliveryDate)}</strong> • ${o.deliveryMethod}</p>
+                  <h4 class="font-serif text-base font-bold text-espresso mt-0.5">${order.customerName}</h4>
+                  <p class="text-[11px] text-espresso/60">${order.deliveryMethod} ${order.customerPhone ? '• ' + order.customerPhone : ''}</p>
                 </div>
 
-                <select onchange="quickUpdateOrderStatus('${o.id}', this.value)" class="px-2.5 py-1.5 rounded-xl bg-cream border border-espresso/15 text-xs font-bold text-espresso focus:outline-none">
-                  <option value="Antrean" ${o.fulfillmentStatus === 'Antrean' ? 'selected' : ''}>Antrean</option>
-                  <option value="Dipanggang" ${o.fulfillmentStatus === 'Dipanggang' ? 'selected' : ''}>Dipanggang</option>
-                  <option value="Siap Kirim" ${o.fulfillmentStatus === 'Siap Kirim' ? 'selected' : ''}>Siap Kirim</option>
-                  <option value="Selesai" ${o.fulfillmentStatus === 'Selesai' ? 'selected' : ''}>Selesai</option>
+                <select onchange="quickUpdateOrderStatus('${order.id}', this.value)" class="px-2.5 py-1.5 rounded-xl text-xs font-bold border border-espresso/10 focus:outline-none ${getStatusBadgeClass(order.fulfillmentStatus)}">
+                  <option value="Antrean" ${order.fulfillmentStatus === 'Antrean' ? 'selected' : ''}>Antrean</option>
+                  <option value="Dipanggang" ${order.fulfillmentStatus === 'Dipanggang' ? 'selected' : ''}>Dipanggang</option>
+                  <option value="Siap Kirim" ${order.fulfillmentStatus === 'Siap Kirim' ? 'selected' : ''}>Siap Kirim</option>
+                  <option value="Selesai" ${order.fulfillmentStatus === 'Selesai' ? 'selected' : ''}>Selesai</option>
                 </select>
               </div>
 
-              <div class="bg-cream/80 p-3 rounded-xl space-y-1.5 text-xs">
-                ${(o.items || []).map(item => `
-                  <div class="flex justify-between gap-2">
-                    <span class="text-espresso font-medium">${item.qty}x ${item.name}</span>
+              <div class="bg-cream/70 rounded-xl p-3 space-y-1.5">
+                ${(order.items || []).map(item => `
+                  <div class="flex justify-between text-xs">
+                    <span class="text-espresso font-medium"><b class="text-terracotta">${item.qty}x</b> ${item.name}</span>
                     <span class="text-espresso/75 tabular-nums">${formatRupiah(item.qty * item.price)}</span>
                   </div>
                 `).join('')}
-                ${Number(o.shippingFee) > 0 ? `
-                  <div class="flex justify-between gap-2 pt-1 border-t border-espresso/10 text-espresso/70">
+                ${Number(order.shippingFee) > 0 ? `
+                  <div class="flex justify-between text-xs pt-1 border-t border-espresso/10 text-espresso/70">
                     <span>Ongkos Kirim</span>
-                    <span class="tabular-nums">${formatRupiah(o.shippingFee)}</span>
+                    <span class="tabular-nums">${formatRupiah(order.shippingFee)}</span>
                   </div>
                 ` : ''}
               </div>
 
-              ${o.notes ? `<p class="text-[11px] text-espresso/70 italic bg-creamDark/60 px-3 py-1.5 rounded-lg">"${o.notes}"</p>` : ''}
+              ${order.notes ? `<p class="text-xs text-espresso/70 italic bg-amberBg/40 px-3 py-2 rounded-xl">"${order.notes}"</p>` : ''}
             </div>
 
-            <div class="pt-3 border-t border-espresso/10 flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p class="text-[11px] text-espresso/55">Total: <strong class="text-espresso tabular-nums">${formatRupiah(total)}</strong></p>
-                ${remaining > 0 ? `<p class="text-xs font-bold text-amber-700 tabular-nums">Sisa: ${formatRupiah(remaining)}</p>` : `<p class="text-xs font-bold text-sage">Pembayaran Lunas</p>`}
+            <div class="pt-3 border-t border-espresso/10 space-y-3">
+              <div class="flex items-center justify-between">
+                <div>
+                  <span class="text-[11px] text-espresso/60 block">Total Tagihan</span>
+                  <span class="font-serif text-base font-bold text-espresso tabular-nums">${formatRupiah(total)}</span>
+                </div>
+                <div class="text-right">
+                  ${rem === 0
+                    ? `<span class="px-2.5 py-1 rounded-full bg-sageBg text-sage text-xs font-bold">LUNAS</span>`
+                    : `<span class="px-2.5 py-1 rounded-full bg-amber-100 text-amber-800 text-xs font-bold tabular-nums">${order.paymentStatus} (Kurang ${formatRupiah(rem)})</span>`
+                  }
+                </div>
               </div>
 
-              <div class="flex items-center gap-1.5">
-                ${remaining > 0 ? `
-                  <button onclick="markOrderPaid('${o.id}')" class="px-2.5 py-1.5 rounded-xl bg-sageBg hover:bg-sage text-sage hover:text-white text-xs font-bold transition" title="Tandai Lunas">
+              <div class="flex flex-wrap items-center gap-2">
+                <button onclick="openReceiptModal('${order.id}')" class="flex-1 py-2 px-3 rounded-xl bg-sage text-white text-xs font-bold flex items-center justify-center gap-1.5 hover:opacity-90 transition">
+                  <i data-lucide="receipt" class="w-3.5 h-3.5"></i>
+                  <span>Nota WA</span>
+                </button>
+                ${rem > 0 ? `
+                  <button onclick="markOrderPaid('${order.id}')" class="py-2 px-3 rounded-xl bg-sageBg text-sage hover:bg-sage hover:text-white text-xs font-bold transition">
                     Lunasi
                   </button>
                 ` : ''}
-                <button onclick="openReceiptModal('${o.id}')" class="p-2 rounded-xl bg-espresso text-cream hover:bg-espressoLight transition" title="Nota WhatsApp">
-                  <i data-lucide="file-text" class="w-4 h-4"></i>
-                </button>
-                <button onclick="openOrderModal('${o.id}')" class="p-2 rounded-xl bg-creamDark hover:bg-espresso/15 text-espresso transition" title="Edit PO">
+                <button onclick="openOrderModal('${order.id}')" class="p-2 rounded-xl bg-creamDark hover:bg-espresso/15 text-espresso transition" title="Edit PO">
                   <i data-lucide="pencil" class="w-4 h-4"></i>
                 </button>
-                <button onclick="confirmDeleteOrder('${o.id}')" class="p-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 transition" title="Hapus PO">
+                <button onclick="confirmDeleteOrder('${order.id}')" class="p-2 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 transition" title="Hapus PO">
                   <i data-lucide="trash-2" class="w-4 h-4"></i>
                 </button>
               </div>
@@ -1889,251 +1911,24 @@
     }
 
     function quickUpdateOrderStatus(orderId, newStatus) {
-      const idx = appData.orders.findIndex(o => o.id === orderId);
-      if (idx !== -1) {
-        appData.orders[idx].fulfillmentStatus = newStatus;
-        saveData({ syncAction: 'upsertOrder', syncPayload: appData.orders[idx] });
-        renderDashboard();
-        showToast(`Status diubah ke "${newStatus}"`);
-      }
+      const order = appData.orders.find(o => o.id === orderId);
+      if (!order) return;
+      order.fulfillmentStatus = newStatus;
+      saveData();
+      renderOrders();
+      renderDashboard();
+      showToast(`Status ${order.orderCode} diubah ke ${newStatus}`);
     }
 
     function markOrderPaid(orderId) {
-      const idx = appData.orders.findIndex(o => o.id === orderId);
-      if (idx !== -1) {
-        appData.orders[idx].paymentStatus = 'Lunas';
-        appData.orders[idx].dpAmount = getOrderTotal(appData.orders[idx]);
-        saveData({ syncAction: 'upsertOrder', syncPayload: appData.orders[idx] });
-        renderOrders();
-        renderDashboard();
-        showToast('Pembayaran ditandai Lunas!');
-      }
-    }
-
-    // =========================================================================
-    // 6. ORDER MODAL (CREATE / EDIT)
-    // =========================================================================
-    function setFieldVal(id, val) {
-      const el = document.getElementById(id);
-      if (el) el.value = val;
-    }
-
-    function openOrderModal(orderId = null) {
-      const modal = document.getElementById('orderModal');
-      const itemsContainer = document.getElementById('orderItemsContainer');
-      if (!modal || !itemsContainer) return;
-      itemsContainer.innerHTML = '';
-
-      if (orderId) {
-        const order = appData.orders.find(o => o.id === orderId);
-        if (!order) return;
-        document.getElementById('orderModalTitle').textContent = `Edit Pesanan ${order.orderCode}`;
-        setFieldVal('editOrderId', order.id);
-        setFieldVal('ordCustomerName', order.customerName || '');
-        setFieldVal('ordCustomerPhone', order.customerPhone || '');
-        setFieldVal('ordDeliveryDate', order.deliveryDate || getTomorrowISO());
-        setFieldVal('ordDeliveryMethod', (order.deliveryMethod && order.deliveryMethod !== 'Ambil di Rumah') ? order.deliveryMethod : 'Pick Up');
-        setFieldVal('ordShippingFee', order.shippingFee || 0);
-        setFieldVal('ordPaymentStatus', order.paymentStatus || 'Belum Bayar');
-        setFieldVal('ordDpAmount', order.dpAmount || 0);
-        setFieldVal('ordNotes', order.notes || '');
-
-        (order.items || []).forEach(it => addOrderItemRow(it.name, it.qty, it.price));
-      } else {
-        document.getElementById('orderModalTitle').textContent = 'Catat Pesanan PO Baru';
-        setFieldVal('editOrderId', '');
-        setFieldVal('ordCustomerName', '');
-        setFieldVal('ordCustomerPhone', '');
-        setFieldVal('ordDeliveryDate', getTomorrowISO());
-        setFieldVal('ordDeliveryMethod', 'Pick Up');
-        setFieldVal('ordShippingFee', 0);
-        setFieldVal('ordPaymentStatus', 'Belum Bayar');
-        setFieldVal('ordDpAmount', 0);
-        setFieldVal('ordNotes', '');
-
-        const firstMenu = appData.menus[0];
-        if (firstMenu) {
-          addOrderItemRow(firstMenu.name, 1, firstMenu.price);
-        } else {
-          addOrderItemRow('', 1, 0);
-        }
-      }
-
-      if (typeof toggleDpInput === 'function') toggleDpInput();
-      if (typeof recalculateOrderModalTotal === 'function') recalculateOrderModalTotal();
-      modal.classList.remove('hidden');
-      refreshIcons();
-    }
-
-    function closeOrderModal() {
-      const modal = document.getElementById('orderModal');
-      if (modal) modal.classList.add('hidden');
-    }
-
-    function addOrderItemRow(selectedName = '', qty = 1, price = 0) {
-      const container = document.getElementById('orderItemsContainer');
-      if (!container) return;
-      const row = document.createElement('div');
-      row.className = 'order-item-row grid grid-cols-12 gap-2 items-center bg-cream/70 p-2.5 rounded-xl border border-espresso/10';
-
-      const menuOptions = (appData.menus || []).map(m =>
-        `<option value="${escapeHtml(m.name)}" data-price="${m.price}" ${m.name === selectedName ? 'selected' : ''}>${escapeHtml(m.name)} (${formatRupiah(m.price)})</option>`
-      ).join('');
-
-      row.innerHTML = `
-        <div class="col-span-12 sm:col-span-6">
-          <select onchange="onOrderMenuSelect(this)" class="ord-item-select w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-semibold focus:outline-none">
-            <option value="">-- Pilih Menu / Ketik Manual --</option>
-            ${menuOptions}
-            ${selectedName && !(appData.menus || []).some(m => m.name === selectedName)
-              ? `<option value="${escapeHtml(selectedName)}" data-price="${price}" selected>${escapeHtml(selectedName)}</option>`
-              : ''}
-          </select>
-        </div>
-        <div class="col-span-4 sm:col-span-2">
-          <input type="number" min="1" value="${qty}" oninput="recalculateOrderModalTotal()" class="ord-item-qty w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-bold text-center tabular-nums" placeholder="Qty" />
-        </div>
-        <div class="col-span-6 sm:col-span-3">
-          <input type="number" min="0" step="500" value="${price}" oninput="recalculateOrderModalTotal()" class="ord-item-price w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-semibold tabular-nums" placeholder="Harga" />
-        </div>
-        <div class="col-span-2 sm:col-span-1 flex justify-end">
-          <button type="button" onclick="removeOrderItemRow(this)" class="p-1.5 rounded-lg text-red-600 hover:bg-red-50" title="Hapus Baris">
-            <i data-lucide="trash-2" class="w-4 h-4"></i>
-          </button>
-        </div>
-      `;
-      container.appendChild(row);
-      refreshIcons();
-      recalculateOrderModalTotal();
-    }
-
-    function onOrderMenuSelect(selectEl) {
-      const opt = selectEl.options[selectEl.selectedIndex];
-      const row = selectEl.closest('.order-item-row');
-      if (!row || !opt) return;
-      const priceVal = Number(opt.dataset.price) || 0;
-      const priceInput = row.querySelector('.ord-item-price');
-      if (priceInput && priceVal > 0) {
-        priceInput.value = priceVal;
-      }
-      recalculateOrderModalTotal();
-    }
-
-    function removeOrderItemRow(btn) {
-      const container = document.getElementById('orderItemsContainer');
-      const rows = container ? container.querySelectorAll('.order-item-row') : [];
-      if (rows.length <= 1) {
-        showToast('Minimal harus ada 1 item kue.');
-        return;
-      }
-      const row = btn.closest('.order-item-row');
-      if (row) row.remove();
-      recalculateOrderModalTotal();
-    }
-
-    function toggleDpInput() {
-      const statusEl = document.getElementById('ordPaymentStatus');
-      const wrap = document.getElementById('dpAmountWrapper');
-      if (!statusEl || !wrap) return;
-      if (statusEl.value === 'DP') {
-        wrap.classList.remove('hidden');
-      } else {
-        wrap.classList.add('hidden');
-      }
-    }
-
-    function collectOrderModalItems() {
-      const rows = document.querySelectorAll('#orderItemsContainer .order-item-row');
-      const items = [];
-      rows.forEach(row => {
-        const sel = row.querySelector('.ord-item-select');
-        const qtyEl = row.querySelector('.ord-item-qty');
-        const priceEl = row.querySelector('.ord-item-price');
-        const name = sel ? sel.value.trim() : '';
-        const qty = Number(qtyEl ? qtyEl.value : 0) || 0;
-        const price = Number(priceEl ? priceEl.value : 0) || 0;
-        if (name && qty > 0) {
-          const matchedMenu = (appData.menus || []).find(m => m.name === name);
-          items.push({
-            menuId: matchedMenu ? matchedMenu.id : '',
-            name,
-            qty,
-            price
-          });
-        }
-      });
-      return items;
-    }
-
-    function recalculateOrderModalTotal() {
-      const items = collectOrderModalItems();
-      const subtotal = items.reduce((s, i) => s + i.qty * i.price, 0);
-      const shipping = Number(document.getElementById('ordShippingFee')?.value) || 0;
-      const total = subtotal + shipping;
-      const payStatus = document.getElementById('ordPaymentStatus')?.value || 'Belum Bayar';
-      const paid = payStatus === 'Lunas'
-        ? total
-        : payStatus === 'DP'
-        ? Math.min(total, Number(document.getElementById('ordDpAmount')?.value) || 0)
-        : 0;
-      const rem = Math.max(0, total - paid);
-
-      const totEl = document.getElementById('modalOrderTotalText');
-      const remEl = document.getElementById('modalOrderRemainingText');
-      if (totEl) totEl.textContent = formatRupiah(total);
-      if (remEl) remEl.textContent = formatRupiah(rem);
-    }
-
-    function handleSaveOrder(e) {
-      e.preventDefault();
-      const items = collectOrderModalItems();
-      if (items.length === 0) {
-        showToast('Pilih minimal 1 menu kue!');
-        return;
-      }
-
-      const editId = document.getElementById('editOrderId').value;
-      const existingOrder = editId ? appData.orders.find(o => o.id === editId) : null;
-      const shippingFee = Number(document.getElementById('ordShippingFee').value) || 0;
-      const paymentStatus = document.getElementById('ordPaymentStatus').value;
-      const subtotal = items.reduce((s, i) => s + i.qty * i.price, 0);
-      const total = subtotal + shippingFee;
-      const dpAmount = paymentStatus === 'Lunas'
-        ? total
-        : paymentStatus === 'DP'
-        ? (Number(document.getElementById('ordDpAmount').value) || 0)
-        : 0;
-
-      const orderObj = {
-        id: editId || 'ord-' + Date.now(),
-        orderCode: existingOrder
-          ? (existingOrder.orderCode || 'PO-' + Math.floor(100 + Math.random() * 900))
-          : 'PO-' + (101 + appData.orders.length),
-        customerName: document.getElementById('ordCustomerName').value.trim(),
-        customerPhone: document.getElementById('ordCustomerPhone').value.trim(),
-        deliveryDate: document.getElementById('ordDeliveryDate').value,
-        deliveryMethod: document.getElementById('ordDeliveryMethod').value,
-        fulfillmentStatus: existingOrder ? (existingOrder.fulfillmentStatus || 'Antrean') : 'Antrean',
-        items,
-        shippingFee,
-        paymentStatus,
-        dpAmount,
-        notes: document.getElementById('ordNotes').value.trim(),
-        createdAt: existingOrder ? (existingOrder.createdAt || getTodayISO()) : getTodayISO()
-      };
-
-      if (editId) {
-        const idx = appData.orders.findIndex(o => o.id === editId);
-        if (idx !== -1) appData.orders[idx] = orderObj;
-      } else {
-        appData.orders.unshift(orderObj);
-      }
-
-      saveData({ syncAction: 'upsertOrder', syncPayload: orderObj });
-      closeOrderModal();
-      renderDashboard();
+      const order = appData.orders.find(o => o.id === orderId);
+      if (!order) return;
+      order.paymentStatus = 'Lunas';
+      order.dpAmount = getOrderTotal(order);
+      saveData();
       renderOrders();
-      showToast(editId ? 'Pesanan PO diperbarui!' : 'Pesanan PO baru disimpan!');
+      renderDashboard();
+      showToast(`${order.orderCode} ditandai LUNAS!`);
     }
 
     function confirmDeleteOrder(orderId) {
@@ -2144,55 +1939,271 @@
         `Pesanan atas nama ${order.customerName} akan dihapus permanen.`,
         () => {
           appData.orders = appData.orders.filter(o => o.id !== orderId);
-          saveData({ syncAction: 'syncAll' });
+          saveData();
           renderOrders();
           renderDashboard();
-          showToast('Pesanan dihapus.');
+          showToast('Pesanan berhasil dihapus.');
         }
       );
+    }
+
+    // --- Order Modal Add/Edit ---
+    function openOrderModal(orderId = null) {
+      const form = document.getElementById('orderForm');
+      if (form) form.reset();
+      const setVal = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.value = val;
+      };
+      setVal('editOrderId', orderId || '');
+
+      const itemsContainer = document.getElementById('orderItemsContainer');
+      if (itemsContainer) itemsContainer.innerHTML = '';
+
+      if (orderId) {
+        const order = appData.orders.find(o => o.id === orderId);
+        if (!order) return;
+        const titleEl = document.getElementById('orderModalTitle');
+        if (titleEl) titleEl.textContent = `Edit Pesanan ${order.orderCode}`;
+        setVal('ordCustomerName', order.customerName || '');
+        setVal('ordCustomerPhone', order.customerPhone || '');
+        setVal('ordDeliveryDate', order.deliveryDate || getTomorrowISO());
+        setVal('ordDeliveryMethod', order.deliveryMethod || 'Pick Up');
+        setVal('ordShippingFee', order.shippingFee || 0);
+        setVal('ordPaymentStatus', order.paymentStatus || 'Belum Bayar');
+        setVal('ordDpAmount', order.dpAmount || 0);
+        setVal('ordNotes', order.notes || '');
+
+        (order.items || []).forEach(it => addOrderItemRow(it));
+      } else {
+        const titleEl = document.getElementById('orderModalTitle');
+        if (titleEl) titleEl.textContent = 'Catat Pesanan PO Baru';
+        setVal('ordDeliveryDate', getTomorrowISO());
+        setVal('ordDeliveryMethod', 'Pick Up');
+        setVal('ordShippingFee', 0);
+        setVal('ordPaymentStatus', 'Belum Bayar');
+        setVal('ordDpAmount', 0);
+        addOrderItemRow();
+      }
+
+      toggleDpInput();
+      recalculateOrderModalTotal();
+      document.getElementById('orderModal')?.classList.remove('hidden');
+      refreshIcons();
+    }
+
+    function closeOrderModal() {
+      document.getElementById('orderModal')?.classList.add('hidden');
+    }
+
+    function addOrderItemRow(existingItem = null) {
+      const container = document.getElementById('orderItemsContainer');
+      const row = document.createElement('div');
+      row.className = 'order-item-row grid grid-cols-12 gap-2 items-center bg-cream/60 p-2.5 rounded-xl border border-espresso/10';
+
+      const menuOptions = appData.menus.map(m =>
+        `<option value="${m.id}" data-price="${m.price}" data-name="${m.name}" ${existingItem && existingItem.menuId === m.id ? 'selected' : ''}>${m.name} (${formatRupiah(m.price)})</option>`
+      ).join('');
+
+      const defaultPrice = existingItem ? existingItem.price : (appData.menus[0] ? appData.menus[0].price : 0);
+      const defaultName = existingItem ? existingItem.name : (appData.menus[0] ? appData.menus[0].name : '');
+      const defaultQty = existingItem ? existingItem.qty : 1;
+
+      row.innerHTML = `
+        <div class="col-span-12 sm:col-span-6">
+          <select onchange="handleSelectMenuInRow(this)" class="item-menu-select w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-semibold text-espresso focus:outline-none">
+            <option value="">-- Pilih Menu Katalog --</option>
+            ${menuOptions}
+            <option value="CUSTOM" ${existingItem && !existingItem.menuId ? 'selected' : ''}>+ Ketik Nama Kue Manual</option>
+          </select>
+          <input type="text" value="${defaultName}" placeholder="Nama kue..." class="item-name-input mt-1.5 w-full px-2.5 py-1.5 rounded-lg bg-white border border-espresso/15 text-xs ${existingItem && existingItem.menuId ? 'hidden' : ''}" />
+        </div>
+        <div class="col-span-4 sm:col-span-2">
+          <input type="number" value="${defaultQty}" min="1" oninput="recalculateOrderModalTotal()" class="item-qty-input w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-bold text-center tabular-nums" placeholder="Qty" />
+        </div>
+        <div class="col-span-6 sm:col-span-3">
+          <input type="number" value="${defaultPrice}" min="0" step="500" oninput="recalculateOrderModalTotal()" class="item-price-input w-full px-2.5 py-2 rounded-lg bg-white border border-espresso/15 text-xs font-semibold tabular-nums" placeholder="Harga" />
+        </div>
+        <div class="col-span-2 sm:col-span-1 flex justify-end">
+          <button type="button" onclick="removeOrderItemRow(this)" class="p-1.5 text-red-500 hover:bg-red-50 rounded-lg">
+            <i data-lucide="trash" class="w-4 h-4"></i>
+          </button>
+        </div>
+      `;
+
+      container.appendChild(row);
+      refreshIcons();
+      recalculateOrderModalTotal();
+    }
+
+    function handleSelectMenuInRow(selectEl) {
+      const row = selectEl.closest('.order-item-row');
+      const nameInput = row.querySelector('.item-name-input');
+      const priceInput = row.querySelector('.item-price-input');
+      const selectedOpt = selectEl.options[selectEl.selectedIndex];
+
+      if (selectEl.value === 'CUSTOM' || selectEl.value === '') {
+        nameInput.classList.remove('hidden');
+        if (selectEl.value === 'CUSTOM') {
+          nameInput.value = '';
+          nameInput.focus();
+        }
+      } else {
+        nameInput.classList.add('hidden');
+        nameInput.value = selectedOpt.getAttribute('data-name') || '';
+        priceInput.value = selectedOpt.getAttribute('data-price') || 0;
+      }
+      recalculateOrderModalTotal();
+    }
+
+    function removeOrderItemRow(btn) {
+      const rows = document.querySelectorAll('.order-item-row');
+      if (rows.length <= 1) {
+        showToast('Minimal harus ada 1 item kue dalam pesanan.');
+        return;
+      }
+      btn.closest('.order-item-row').remove();
+      recalculateOrderModalTotal();
+    }
+
+    function toggleDpInput() {
+      const status = document.getElementById('ordPaymentStatus').value;
+      const wrapper = document.getElementById('dpAmountWrapper');
+      if (status === 'DP') {
+        wrapper.classList.remove('hidden');
+      } else {
+        wrapper.classList.add('hidden');
+      }
+    }
+
+    function recalculateOrderModalTotal() {
+      let subtotal = 0;
+      document.querySelectorAll('.order-item-row').forEach(row => {
+        const qty = Number(row.querySelector('.item-qty-input').value) || 0;
+        const price = Number(row.querySelector('.item-price-input').value) || 0;
+        subtotal += qty * price;
+      });
+      const shipping = Number(document.getElementById('ordShippingFee').value) || 0;
+      const total = subtotal + shipping;
+
+      const payStatus = document.getElementById('ordPaymentStatus').value;
+      const dpVal = Number(document.getElementById('ordDpAmount').value) || 0;
+      const paid = payStatus === 'Lunas' ? total : (payStatus === 'DP' ? Math.min(dpVal, total) : 0);
+      const remaining = Math.max(0, total - paid);
+
+      document.getElementById('modalOrderTotalText').textContent = formatRupiah(total);
+      document.getElementById('modalOrderRemainingText').textContent = formatRupiah(remaining);
+    }
+
+    function handleSaveOrder(e) {
+      e.preventDefault();
+      const editId = document.getElementById('editOrderId').value;
+      const items = [];
+
+      document.querySelectorAll('.order-item-row').forEach(row => {
+        const sel = row.querySelector('.item-menu-select');
+        const name = row.querySelector('.item-name-input').value.trim();
+        const qty = Number(row.querySelector('.item-qty-input').value) || 0;
+        const price = Number(row.querySelector('.item-price-input').value) || 0;
+        if (name && qty > 0) {
+          items.push({
+            menuId: sel.value && sel.value !== 'CUSTOM' ? sel.value : '',
+            name,
+            qty,
+            price
+          });
+        }
+      });
+
+      if (items.length === 0) {
+        showToast('Pilih atau isi minimal 1 item kue!');
+        return;
+      }
+
+      const existingOrder = editId ? appData.orders.find(o => o.id === editId) : null;
+      const orderPayload = {
+        id: editId || 'ord-' + Date.now(),
+        orderCode: existingOrder ? existingOrder.orderCode : 'PO-' + (100 + appData.orders.length + 1),
+        customerName: document.getElementById('ordCustomerName').value.trim(),
+        customerPhone: document.getElementById('ordCustomerPhone').value.trim(),
+        deliveryDate: document.getElementById('ordDeliveryDate').value,
+        deliveryMethod: document.getElementById('ordDeliveryMethod').value,
+        fulfillmentStatus: existingOrder ? existingOrder.fulfillmentStatus : 'Antrean',
+        items,
+        shippingFee: Number(document.getElementById('ordShippingFee').value) || 0,
+        paymentStatus: document.getElementById('ordPaymentStatus').value,
+        dpAmount: Number(document.getElementById('ordDpAmount').value) || 0,
+        notes: document.getElementById('ordNotes').value.trim(),
+        createdAt: existingOrder ? existingOrder.createdAt : getTodayISO()
+      };
+
+      if (editId) {
+        const idx = appData.orders.findIndex(o => o.id === editId);
+        if (idx !== -1) appData.orders[idx] = orderPayload;
+      } else {
+        appData.orders.unshift(orderPayload);
+      }
+
+      saveData();
+      closeOrderModal();
+      renderDashboard();
+      renderOrders();
+      renderMenus();
+      showToast(editId ? 'Perubahan PO disimpan!' : `Pesanan ${orderPayload.orderCode} berhasil dicatat!`);
     }
 
     // =========================================================================
     // 7. WHATSAPP RECEIPT & BLANK FORM TEMPLATES
     // =========================================================================
-    function openReceiptModal(orderId) {
-      const order = appData.orders.find(o => o.id === orderId);
-      if (!order) return;
-
+    function buildReceiptText(order) {
       const total = getOrderTotal(order);
       const paid = getOrderPaid(order);
       const rem = getOrderRemaining(order);
 
-      const lines = [
-        `*KONFIRMASI PESANAN PO - ${(appData.settings.bakeryName || 'Dapur PO').toUpperCase()}*`,
-        `Kode PO: *${order.orderCode}*`,
-        `Pemesan: *${order.customerName}*`,
-        `Jadwal Kirim: *${formatDateIndo(order.deliveryDate)}* (${order.deliveryMethod})`,
-        `--------------------------------`,
-        ...(order.items || []).map(i => `• ${i.qty}x ${i.name} = ${formatRupiah(i.qty * i.price)}`),
-        ...(Number(order.shippingFee) > 0 ? [`• Ongkos Kirim = ${formatRupiah(order.shippingFee)}`] : []),
-        `--------------------------------`,
-        `*Total Tagihan: ${formatRupiah(total)}*`,
-        `Status Bayar: *${order.paymentStatus}*` + (order.paymentStatus === 'DP' ? ` (Masuk ${formatRupiah(paid)})` : ''),
-        ...(rem > 0 ? [`*Sisa Pelunasan: ${formatRupiah(rem)}*`] : []),
-        ...(order.notes ? [`Catatan: _${order.notes}_`] : []),
-        ``,
-        `Pembayaran via transfer:`,
-        appData.settings.bankDetails || '-',
-        ``,
-        `Terima kasih sudah memesan di ${appData.settings.bakeryName || 'Dapur PO'}!`
-      ];
+      let lines = `*KONFIRMASI PRE-ORDER*\n`;
+      lines += `*${appData.settings.bakeryName}*\n`;
+      lines += `No. Order: *${order.orderCode}*\n`;
+      lines += `Nama: ${order.customerName}\n`;
+      lines += `Tgl Kirim/Ambil: *${formatDateIndo(order.deliveryDate)}*\n`;
+      lines += `Metode: ${order.deliveryMethod}\n`;
+      lines += `----------------------------\n`;
 
-      const text = lines.join('\n');
+      order.items.forEach(it => {
+        lines += `• ${it.qty}x ${it.name} = ${formatRupiah(it.qty * it.price)}\n`;
+      });
+
+      if (Number(order.shippingFee) > 0) {
+        lines += `• Ongkos Kirim = ${formatRupiah(order.shippingFee)}\n`;
+      }
+
+      lines += `----------------------------\n`;
+      lines += `*TOTAL TAGIHAN: ${formatRupiah(total)}*\n`;
+      lines += `Status Bayar: *${order.paymentStatus}*\n`;
+      if (order.paymentStatus === 'DP') {
+        lines += `DP Masuk: ${formatRupiah(paid)}\n`;
+        lines += `*Sisa Pelunasan: ${formatRupiah(rem)}*\n`;
+      }
+      if (order.notes) {
+        lines += `Catatan: _${order.notes}_\n`;
+      }
+      lines += `\n*Info Pembayaran:*\n${appData.settings.bankDetails}\n`;
+      lines += `\nTerima kasih sudah memesan di ${appData.settings.bakeryName}!`;
+      return lines;
+    }
+
+    function openReceiptModal(orderId) {
+      const order = appData.orders.find(o => o.id === orderId);
+      if (!order) return;
+      const text = buildReceiptText(order);
       document.getElementById('receiptPreviewText').value = text;
 
-      const cleanPhone = (order.customerPhone || '').replace(/[^0-9]/g, '');
-      const waPhone = cleanPhone.startsWith('0') ? '62' + cleanPhone.slice(1) : cleanPhone;
-      const waLink = document.getElementById('waDirectLink');
-      waLink.href = waPhone
-        ? `https://wa.me/${waPhone}?text=${encodeURIComponent(text)}`
+      let cleanPhone = (order.customerPhone || '').replace(/\D/g, '');
+      if (cleanPhone.startsWith('0')) cleanPhone = '62' + cleanPhone.slice(1);
+      const waUrl = cleanPhone
+        ? `https://wa.me/${cleanPhone}?text=${encodeURIComponent(text)}`
         : `https://wa.me/?text=${encodeURIComponent(text)}`;
 
+      document.getElementById('waDirectLink').href = waUrl;
       document.getElementById('receiptModal').classList.remove('hidden');
       refreshIcons();
     }
@@ -2207,77 +2218,79 @@
     }
 
     function copyBlankOrderTemplate() {
-      const tpl = [
-        `*FORMAT ORDER PO - ${(appData.settings.bakeryName || 'Dapur PO').toUpperCase()}*`,
-        `Nama Pemesan:`,
-        `No. WhatsApp:`,
-        `Tanggal Kirim:`,
-        `Metode Kirim (Pick Up / GoSend / Kurir):`,
-        `Alamat Lengkap:`,
-        `Pesanan & Jumlah:`,
-        `1. `,
-        `2. `,
-        `Catatan / Ucapan:`,
-        ``,
-        `Terima kasih!`
-      ].join('\n');
-      copyTextToClipboard(tpl, 'Format order kosong disalin untuk WA!');
+      const template = `*FORM PRE-ORDER — ${appData.settings.bakeryName.toUpperCase()}*\n` +
+        `Nama Pemesan:\n` +
+        `No. WhatsApp:\n` +
+        `Tanggal Kirim / Ambil:\n` +
+        `Metode (Pick Up / GoSend / Kurir):\n` +
+        `Alamat Lengkap (jika dikirim):\n\n` +
+        `*Pesanan Kue & Jumlah:*\n` +
+        `1. \n` +
+        `2. \n\n` +
+        `Catatan / Kartu Ucapan:\n` +
+        `----------------------------\n` +
+        `_Terima kasih! Admin akan segera mengonfirmasi total & slot PO Anda._`;
+      copyTextToClipboard(template, 'Form order kosong disalin! Siap paste ke chat.');
     }
 
     // =========================================================================
-    // 8. CATALOG & QUOTA MANAGEMENT
+    // 8. CATALOG & BATCH QUOTA MANAGEMENT
     // =========================================================================
-    function getMenuBookedQty(menuName) {
-      return appData.orders
-        .filter(o => o.fulfillmentStatus !== 'Selesai')
-        .reduce((sum, o) => {
-          const matched = (o.items || []).filter(i => i.name === menuName);
-          return sum + matched.reduce((s, i) => s + (Number(i.qty) || 0), 0);
-        }, 0);
+    function getMenuBookedQty(menu) {
+      let booked = 0;
+      appData.orders.forEach(o => {
+        if (o.fulfillmentStatus === 'Selesai') return;
+        (o.items || []).forEach(it => {
+          if (it.menuId === menu.id || it.name.toLowerCase() === menu.name.toLowerCase()) {
+            booked += Number(it.qty) || 0;
+          }
+        });
+      });
+      return booked;
     }
 
     function renderMenus() {
       const container = document.getElementById('catalogListContainer');
-      if (!container) return;
-
-      if (!appData.menus || appData.menus.length === 0) {
-        container.innerHTML = `<div class="col-span-full bg-white p-8 rounded-2xl border border-espresso/10 text-center text-xs text-espresso/60">Belum ada menu di katalog. Klik "+ Tambah Menu" untuk mulai mengisi daftar kue.</div>`;
+      if (appData.menus.length === 0) {
+        container.innerHTML = `<div class="col-span-full bg-white p-8 rounded-2xl text-center text-xs text-espresso/60">Belum ada menu di katalog. Klik "+ Tambah Menu".</div>`;
         return;
       }
 
-      container.innerHTML = appData.menus.map(m => {
-        const booked = getMenuBookedQty(m.name);
-        const quota = Number(m.quota) || 0;
-        const pct = quota > 0 ? Math.min(100, Math.round((booked / quota) * 100)) : 0;
+      container.innerHTML = appData.menus.map(menu => {
+        const booked = getMenuBookedQty(menu);
+        const hasQuota = Number(menu.quota) > 0;
+        const pct = hasQuota ? Math.min(100, Math.round((booked / menu.quota) * 100)) : 0;
 
         return `
-          <div class="bg-white rounded-2xl border border-espresso/10 shadow-2xs p-4 flex flex-col justify-between gap-3">
+          <div class="bg-white rounded-2xl border border-espresso/10 p-4 md:p-5 shadow-2xs flex flex-col justify-between gap-4">
             <div>
               <div class="flex items-center justify-between gap-2 mb-1.5">
-                <span class="px-2.5 py-0.5 rounded-full bg-creamDark text-espresso/75 text-[11px] font-semibold">${m.category || 'Menu'}</span>
+                <span class="px-2.5 py-0.5 rounded-full bg-creamDark text-espresso/80 text-[11px] font-semibold">${menu.category}</span>
                 <div class="flex items-center gap-1">
-                  <button onclick="openMenuModal('${m.id}')" class="p-1.5 rounded-lg hover:bg-creamDark text-espresso/70" title="Edit Menu">
+                  <button onclick="openMenuModal('${menu.id}')" class="p-1.5 rounded-lg hover:bg-creamDark text-espresso/70" title="Edit Menu">
                     <i data-lucide="pencil" class="w-3.5 h-3.5"></i>
                   </button>
-                  <button onclick="confirmDeleteMenu('${m.id}')" class="p-1.5 rounded-lg hover:bg-red-50 text-red-600" title="Hapus Menu">
+                  <button onclick="confirmDeleteMenu('${menu.id}')" class="p-1.5 rounded-lg hover:bg-red-50 text-red-500" title="Hapus Menu">
                     <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                   </button>
                 </div>
               </div>
-              <h4 class="font-bold text-sm text-espresso leading-snug">${m.name}</h4>
-              <p class="font-serif text-lg font-bold text-terracotta mt-1 tabular-nums">${formatRupiah(m.price)}</p>
+              <h4 class="font-serif text-base font-bold text-espresso leading-snug">${menu.name}</h4>
+              <p class="font-bold text-terracotta text-sm mt-1 tabular-nums">${formatRupiah(menu.price)}</p>
             </div>
 
-            <div class="pt-2.5 border-t border-espresso/10 space-y-1.5">
-              <div class="flex justify-between text-[11px] font-semibold">
-                <span class="text-espresso/60">Terpesan aktif: <strong class="text-espresso">${booked}</strong></span>
-                <span class="text-espresso/60">${quota > 0 ? `Kuota: ${quota}` : 'Tanpa batas'}</span>
-              </div>
-              ${quota > 0 ? `
-                <div class="w-full h-2 rounded-full bg-creamDark overflow-hidden">
-                  <div class="h-full rounded-full ${pct >= 100 ? 'bg-red-500' : 'bg-sage'}" style="width: ${pct}%"></div>
+            <div class="pt-3 border-t border-espresso/10">
+              ${hasQuota ? `
+                <div class="flex justify-between text-[11px] font-semibold mb-1.5">
+                  <span class="text-espresso/70">Terpesan: <b>${booked}</b> / ${menu.quota} slot</span>
+                  <span class="${booked >= menu.quota ? 'text-red-600 font-bold' : 'text-sage'}">${booked >= menu.quota ? 'FULL' : 'Sisa ' + (menu.quota - booked)}</span>
                 </div>
-              ` : ''}
+                <div class="w-full h-2 rounded-full bg-creamDark overflow-hidden">
+                  <div class="h-full rounded-full ${booked >= menu.quota ? 'bg-red-500' : 'bg-sage'}" style="width: ${pct}%"></div>
+                </div>
+              ` : `
+                <p class="text-[11px] text-espresso/60">Aktif dipesan: <b>${booked} pcs</b> (Tanpa batas kuota)</p>
+              `}
             </div>
           </div>
         `;
@@ -2286,32 +2299,28 @@
     }
 
     function openMenuModal(menuId = null) {
-      const modal = document.getElementById('menuModal');
-      if (!modal) return;
+      document.getElementById('editMenuId').value = menuId || '';
       if (menuId) {
         const m = appData.menus.find(x => x.id === menuId);
         if (!m) return;
         document.getElementById('menuModalTitle').textContent = 'Edit Menu Kue';
-        setFieldVal('editMenuId', m.id);
-        setFieldVal('menuName', m.name);
-        setFieldVal('menuCategory', m.category || 'Kue Kering');
-        setFieldVal('menuPrice', m.price);
-        setFieldVal('menuQuota', m.quota || 0);
+        document.getElementById('menuName').value = m.name;
+        document.getElementById('menuCategory').value = m.category;
+        document.getElementById('menuPrice').value = m.price;
+        document.getElementById('menuQuota').value = m.quota || 0;
       } else {
         document.getElementById('menuModalTitle').textContent = 'Tambah Menu Kue';
-        setFieldVal('editMenuId', '');
-        setFieldVal('menuName', '');
-        setFieldVal('menuCategory', 'Kue Kering');
-        setFieldVal('menuPrice', '');
-        setFieldVal('menuQuota', 0);
+        document.getElementById('menuName').value = '';
+        document.getElementById('menuCategory').value = 'Kue Kering';
+        document.getElementById('menuPrice').value = '';
+        document.getElementById('menuQuota').value = 20;
       }
-      modal.classList.remove('hidden');
+      document.getElementById('menuModal').classList.remove('hidden');
       refreshIcons();
     }
 
     function closeMenuModal() {
-      const modal = document.getElementById('menuModal');
-      if (modal) modal.classList.add('hidden');
+      document.getElementById('menuModal').classList.add('hidden');
     }
 
     function handleSaveMenu(e) {
@@ -2332,21 +2341,21 @@
         appData.menus.push(menuObj);
       }
 
-      saveData({ syncAction: 'upsertCatalogItem', syncPayload: menuObj });
+      saveData();
       closeMenuModal();
       renderMenus();
-      showToast(editId ? 'Menu diperbarui!' : 'Menu baru ditambahkan!');
+      showToast('Menu katalog disimpan!');
     }
 
     function confirmDeleteMenu(menuId) {
       const m = appData.menus.find(x => x.id === menuId);
       if (!m) return;
       openConfirmDialog(
-        `Hapus Menu "${m.name}"?`,
-        'Menu akan dihapus dari katalog.',
+        'Hapus Menu Katalog?',
+        `Menu "${m.name}" akan dihapus dari daftar katalog.`,
         () => {
           appData.menus = appData.menus.filter(x => x.id !== menuId);
-          saveData({ syncAction: 'syncAll' });
+          saveData();
           renderMenus();
           showToast('Menu dihapus.');
         }
@@ -2354,20 +2363,16 @@
     }
 
     function copyCatalogBroadcast() {
-      if (!appData.menus || appData.menus.length === 0) {
-        showToast('Katalog menu masih kosong.');
+      if (appData.menus.length === 0) {
+        showToast('Katalog masih kosong.');
         return;
       }
-      const lines = [
-        `*OPEN PO - ${(appData.settings.bakeryName || 'Dapur PO').toUpperCase()}*`,
-        `Daftar Menu & Harga:`,
-        `--------------------------------`,
-        ...appData.menus.map((m, idx) => `${idx + 1}. *${m.name}* — ${formatRupiah(m.price)}`),
-        `--------------------------------`,
-        `Format Order: Nama / Alamat / Menu & Jumlah / Tgl Kirim`,
-        `WA Admin: ${appData.settings.whatsapp || '-'}`
-      ];
-      copyTextToClipboard(lines.join('\n'), 'Daftar harga menu disalin untuk broadcast WA!');
+      let text = `*OPEN PRE-ORDER — ${appData.settings.bakeryName.toUpperCase()}*\nFreshly baked by order!\n----------------------------\n`;
+      appData.menus.forEach((m, i) => {
+        text += `${i + 1}. *${m.name}* — ${formatRupiah(m.price)}\n`;
+      });
+      text += `----------------------------\nUntuk pemesanan silakan balas chat ini ya!`;
+      copyTextToClipboard(text, 'Daftar menu broadcast disalin!');
     }
 
     // =========================================================================
@@ -2376,48 +2381,45 @@
     function handleSaveExpense(e) {
       e.preventDefault();
       const catEl = document.querySelector('input[name="expCategory"]:checked');
-      const expObj = {
+      const expense = {
         id: 'exp-' + Date.now(),
         date: document.getElementById('expDate').value || getTodayISO(),
         category: catEl ? catEl.value : 'Bahan Baku',
         title: document.getElementById('expTitle').value.trim(),
         amount: Number(document.getElementById('expAmount').value) || 0
       };
-
-      appData.expenses.unshift(expObj);
-      saveData({ syncAction: 'upsertExpense', syncPayload: expObj });
+      appData.expenses.unshift(expense);
+      saveData();
       document.getElementById('expTitle').value = '';
       document.getElementById('expAmount').value = '';
       renderExpenses();
       renderDashboard();
-      showToast('Pengeluaran dicatat!');
+      showToast('Pengeluaran berhasil dicatat!');
     }
 
     function renderExpenses() {
+      const total = appData.expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+      document.getElementById('expenseTotalBadge').textContent = formatRupiah(total);
+
       const container = document.getElementById('expensesListContainer');
-      const totalBadge = document.getElementById('expenseTotalBadge');
-      if (!container) return;
-
-      const total = (appData.expenses || []).reduce((s, e) => s + (Number(e.amount) || 0), 0);
-      if (totalBadge) totalBadge.textContent = formatRupiah(total);
-
-      if (!appData.expenses || appData.expenses.length === 0) {
-        container.innerHTML = `<p class="p-6 text-xs text-espresso/55 text-center">Belum ada catatan belanja atau biaya operasional.</p>`;
+      if (appData.expenses.length === 0) {
+        container.innerHTML = `<div class="p-8 text-center text-xs text-espresso/60">Belum ada catatan pengeluaran bahan baku.</div>`;
         return;
       }
 
-      container.innerHTML = appData.expenses.map(ex => `
-        <div class="p-4 flex items-center justify-between gap-3 hover:bg-cream/50 transition">
+      const sorted = [...appData.expenses].sort((a, b) => (b.date || '').localeCompare(a.date || ''));
+      container.innerHTML = sorted.map(exp => `
+        <div class="p-4 flex items-center justify-between gap-3 hover:bg-cream/40 transition">
           <div>
             <div class="flex items-center gap-2">
-              <span class="px-2 py-0.5 rounded-md bg-creamDark text-espresso/75 text-[11px] font-semibold">${ex.category}</span>
-              <span class="text-[11px] text-espresso/55">${formatDateIndo(ex.date)}</span>
+              <span class="px-2 py-0.5 rounded-full bg-creamDark text-espresso/75 text-[10px] font-bold">${exp.category}</span>
+              <span class="text-[11px] text-espresso/55">${formatDateIndo(exp.date)}</span>
             </div>
-            <p class="text-sm font-bold text-espresso mt-1">${ex.title}</p>
+            <p class="text-sm font-semibold text-espresso mt-1">${exp.title}</p>
           </div>
-          <div class="flex items-center gap-2.5">
-            <span class="text-sm font-bold text-terracotta tabular-nums">${formatRupiah(ex.amount)}</span>
-            <button onclick="confirmDeleteExpense('${ex.id}')" class="p-1.5 rounded-lg text-red-600 hover:bg-red-50" title="Hapus">
+          <div class="flex items-center gap-3">
+            <span class="text-sm font-bold text-terracotta tabular-nums">${formatRupiah(exp.amount)}</span>
+            <button onclick="deleteExpense('${exp.id}')" class="p-1.5 rounded-lg text-espresso/40 hover:text-red-600 hover:bg-red-50 transition" title="Hapus">
               <i data-lucide="trash-2" class="w-4 h-4"></i>
             </button>
           </div>
@@ -2426,18 +2428,16 @@
       refreshIcons();
     }
 
-    function confirmDeleteExpense(expId) {
-      openConfirmDialog('Hapus Catatan Belanja?', 'Data pengeluaran ini akan dihapus.', () => {
-        appData.expenses = appData.expenses.filter(x => x.id !== expId);
-        saveData({ syncAction: 'syncAll' });
-        renderExpenses();
-        renderDashboard();
-        showToast('Catatan belanja dihapus.');
-      });
+    function deleteExpense(expId) {
+      appData.expenses = appData.expenses.filter(e => e.id !== expId);
+      saveData();
+      renderExpenses();
+      renderDashboard();
+      showToast('Catatan pengeluaran dihapus.');
     }
 
     // =========================================================================
-    // 10. SETTINGS, BACKUP & INITIALIZATION
+    // 10. SETTINGS, BACKUP & CONFIRMATION MODAL
     // =========================================================================
     function updateBrandTitles() {
       const name = (appData.settings && appData.settings.bakeryName) || 'Dapur PO';
@@ -2445,16 +2445,15 @@
       if (el) el.textContent = name;
     }
 
-    function renderSettings() {
-      setFieldVal('setBakeryName', (appData.settings && appData.settings.bakeryName) || '');
-      setFieldVal('setWhatsapp', (appData.settings && appData.settings.whatsapp) || '');
-      setFieldVal('setBankDetails', (appData.settings && appData.settings.bankDetails) || '');
-
+    function populateSettingsForm() {
+      const s = appData.settings || {};
       const sync = appData.sync || {};
-      setFieldVal('setGasUrl', sync.webAppUrl || '');
-      setFieldVal('setApiToken', sync.apiToken || '');
-      const autoEl = document.getElementById('setAutoSync');
-      if (autoEl) autoEl.checked = sync.autoSync !== false;
+      if (document.getElementById('setBakeryName')) document.getElementById('setBakeryName').value = s.bakeryName || '';
+      if (document.getElementById('setWhatsapp')) document.getElementById('setWhatsapp').value = s.whatsapp || '';
+      if (document.getElementById('setBankDetails')) document.getElementById('setBankDetails').value = s.bankDetails || '';
+      if (document.getElementById('setGasUrl')) document.getElementById('setGasUrl').value = sync.webAppUrl || DEFAULT_GAS_WEB_APP_URL || '';
+      if (document.getElementById('setApiToken')) document.getElementById('setApiToken').value = sync.apiToken || DEFAULT_GAS_API_TOKEN || '';
+      if (document.getElementById('setAutoSync')) document.getElementById('setAutoSync').checked = sync.autoSync !== false;
       updateSyncStatusUI();
     }
 
@@ -2465,13 +2464,14 @@
         whatsapp: document.getElementById('setWhatsapp').value.trim(),
         bankDetails: document.getElementById('setBankDetails').value.trim()
       };
-      saveData({ syncAction: 'syncAll' });
+      saveData();
       updateBrandTitles();
-      showToast('Profil dapur disimpan!');
+      showToast('Pengaturan dapur disimpan!');
     }
 
     function exportBackupJSON() {
-      const blob = new Blob([JSON.stringify(appData, null, 2)], { type: 'application/json' });
+      const dataStr = JSON.stringify(appData, null, 2);
+      const blob = new Blob([dataStr], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -2480,94 +2480,119 @@
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
-      showToast('File backup diunduh!');
+      showToast('File backup berhasil diunduh!');
     }
 
     function importBackupJSON(e) {
-      const file = e.target.files && e.target.files[0];
+      const file = e.target.files[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = function(ev) {
+      reader.onload = function (evt) {
         try {
-          const parsed = JSON.parse(ev.target.result);
-          if (!parsed || !Array.isArray(parsed.orders)) {
-            throw new Error('Format file backup tidak valid.');
+          const imported = JSON.parse(evt.target.result);
+          if (!imported.orders || !imported.menus) {
+            throw new Error('Format file tidak sesuai');
           }
-          const currentSync = appData.sync;
-          appData = parsed;
-          if (!appData.sync) appData.sync = currentSync;
-          saveData({ syncAction: 'syncAll' });
+          appData = Object.assign(getDefaultData(), imported);
+          saveData();
           updateBrandTitles();
           renderDashboard();
           renderOrders();
           renderMenus();
           renderExpenses();
-          renderSettings();
-          showToast('Data berhasil dipulihkan!');
+          populateSettingsForm();
+          showToast('Data berhasil dipulihkan dari backup!');
         } catch (err) {
-          showToast('Gagal memulihkan file JSON.');
+          showToast('File backup tidak valid!');
         }
       };
       reader.readAsText(file);
+      e.target.value = '';
     }
 
     function resetDemoData() {
       openConfirmDialog(
         'Reset ke Data Contoh?',
-        'Seluruh pesanan dan catatan lokal akan diganti dengan data contoh awal.',
+        'Seluruh pesanan dan catatan saat ini akan diganti dengan data simulasi awal.',
         () => {
           const currentSync = appData.sync;
           appData = getDefaultData();
           appData.sync = currentSync;
-          saveData({ skipAutoSync: true });
+          saveData();
           updateBrandTitles();
           renderDashboard();
           renderOrders();
           renderMenus();
           renderExpenses();
-          renderSettings();
+          populateSettingsForm();
           showToast('Data dikembalikan ke contoh awal.');
         }
       );
     }
 
-    function setupPwaManifest() {
+    function openConfirmDialog(title, message, onConfirm) {
+      document.getElementById('confirmModalTitle').textContent = title;
+      document.getElementById('confirmModalMessage').textContent = message;
+      const actionBtn = document.getElementById('confirmModalActionBtn');
+      actionBtn.onclick = () => {
+        closeConfirmDialog();
+        onConfirm();
+      };
+      document.getElementById('confirmModal').classList.remove('hidden');
+    }
+
+    function closeConfirmDialog() {
+      document.getElementById('confirmModal').classList.add('hidden');
+    }
+
+    // =========================================================================
+    // 11. PWA MANIFEST & BOOTSTRAP
+    // =========================================================================
+    function initPwaManifest() {
       try {
-        const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" rx="112" fill="#2C1E16"/><circle cx="256" cy="256" r="150" fill="#C86D51"/><path d="M176 280c0-44 36-80 80-80s80 36 80 80H176z" fill="#FAF6F0"/></svg>`;
+        const svgIcon = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192"><rect width="192" height="192" rx="40" fill="#2C1E16"/><circle cx="96" cy="96" r="54" fill="#C86D51"/><text x="96" y="112" font-size="54" text-anchor="middle" fill="#FAF6F0" font-family="Georgia,serif" font-weight="bold">PO</text></svg>`;
         const iconUrl = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgIcon);
-        const manifest = {
+        const manifestObj = {
           name: 'Dapur PO — Manajemen Pre-Order Kue',
           short_name: 'Dapur PO',
-          start_url: '.',
+          start_url: './',
           display: 'standalone',
           background_color: '#FAF6F0',
           theme_color: '#2C1E16',
-          icons: [{ src: iconUrl, sizes: '512x512', type: 'image/svg+xml', purpose: 'any maskable' }]
+          icons: [
+            { src: iconUrl, sizes: '192x192', type: 'image/svg+xml', purpose: 'any' },
+            { src: iconUrl, sizes: '512x512', type: 'image/svg+xml', purpose: 'any' }
+          ]
         };
-        const manifestBlob = new Blob([JSON.stringify(manifest)], { type: 'application/manifest+json' });
-        const linkEl = document.getElementById('pwa-manifest');
-        if (linkEl) linkEl.href = URL.createObjectURL(manifestBlob);
+        const manifestLink = document.getElementById('pwa-manifest');
+        if (manifestLink) {
+          manifestLink.href = 'data:application/manifest+json;charset=utf-8,' + encodeURIComponent(JSON.stringify(manifestObj));
+        }
       } catch (_) {}
     }
 
     document.addEventListener('DOMContentLoaded', () => {
-      setupPwaManifest();
-      setFieldVal('expDate', getTodayISO());
+      initPwaManifest();
       updateBrandTitles();
+      const expDateEl = document.getElementById('expDate');
+      if (expDateEl) expDateEl.value = getTodayISO();
       renderDashboard();
       renderOrders();
       renderMenus();
       renderExpenses();
-      renderSettings();
+      populateSettingsForm();
+      updateSyncStatusUI();
       refreshIcons();
 
-      setTimeout(() => runAutoPullIfEnabled(), 1200);
-      setInterval(() => runAutoPullIfEnabled(), 25000);
-      document.addEventListener('visibilitychange', () => {
-        if (document.visibilityState === 'visible') {
-          runAutoPullIfEnabled();
-        }
-      });
+      if (hasGasConfig()) {
+        setTimeout(() => runAutoPullIfEnabled(), 900);
+        setInterval(() => runAutoPullIfEnabled(), 25000);
+        document.addEventListener('visibilitychange', () => {
+          if (document.visibilityState === 'visible') {
+            runAutoPullIfEnabled();
+          }
+        });
+      }
     });
   </script>
 </body>
